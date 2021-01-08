@@ -1,0 +1,44 @@
+---
+id: 281757
+num_rows: 100000
+file_format: yaml
+name: Data Generator Schema
+include_header: true
+columns:
+- name: id
+  null_percentage: 0
+  type: GUID
+  formula: upper(this)
+- name: first_name
+  null_percentage: 0
+  type: First Name
+  formula: ''
+- name: last_name
+  null_percentage: 0
+  type: Last Name
+  formula: ''
+- name: email
+  null_percentage: 0
+  type: Email Address
+  formula: ''
+- name: gender
+  null_percentage: 10
+  type: Gender
+  formula: ''
+- name: date
+  null_percentage: 10
+  type: Datetime
+  min: 12/24/2019
+  max: 12/23/2020
+  format: "%Y/%m/%d"
+  formula: ''
+- name: custom
+  null_percentage: 10
+  type: Custom List
+  values:
+  - one
+  - two
+  - three
+  selectionStyle: random
+  distribution:
+  formula: ''

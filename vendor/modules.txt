@@ -1,0 +1,12 @@
+# github.com/artonge/go-csv-tag/v2 v2.0.7
+## explicit
+# github.com/bxcodec/faker/v3 v3.5.0
+## explicit
+github.com/bxcodec/faker/v3
+github.com/bxcodec/faker/v3/support/slice
+# github.com/jszwec/csvutil v1.4.0
+## explicit
+github.com/jszwec/csvutil
+# gopkg.in/yaml.v3 v3.0.0-20200615113413-eeeca48fe776
+## explicit
+gopkg.in/yaml.v3
