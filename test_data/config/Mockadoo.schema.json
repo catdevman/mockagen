@@ -1,6 +1,6 @@
 {
   "id": 281757,
-  "num_rows": 10000,
+  "num_rows": 100000,
   "file_format": "yaml",
   "name": "Data Generator Schema",
   "include_header": true,
@@ -49,9 +49,9 @@
       "null_percentage": 10,
       "type": "Custom List",
       "values": [
-        "one",
-        "two",
-        "three"
+        1,
+        2,
+        3
       ],
       "selectionStyle": "random",
       "distribution": null,

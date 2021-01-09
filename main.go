@@ -22,7 +22,7 @@ var mapToFaker = map[string]string{
 	"Email Address": "email",
 	"Gender":        "oneof: male,female",
 	"Datetime":      "date",
-	"Custom List":   "oneof:1,2",
+	"Custom List":   "oneof:",
 }
 
 func main() {
@@ -36,7 +36,11 @@ func main() {
 	for _, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
 		name := strings.ToUpper(col.Name)
-		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", mapToFaker[col.Type], strings.ToLower(col.Name), strings.ToLower(col.Name), strings.ToLower(col.Name))
+		fakerStr := mapToFaker[col.Type]
+		if col.Type == "Custom List" {
+			fakerStr += strings.Join(col.Values, ",")
+		}
+		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", fakerStr, strings.ToLower(col.Name), strings.ToLower(col.Name), strings.ToLower(col.Name))
 		tag := reflect.StructTag(tagStr) // This should also have info for json, csv, yaml tags
 		t := reflect.TypeOf("")
 		// fmt.Println(name, tag, t)
@@ -57,7 +61,6 @@ func main() {
 		fakes = append(fakes, reflect.ValueOf(fakerInterface).Interface())
 	}
 
-	// Use list of fake data to create csv, json, yaml
 	if strings.Compare(config.FileFormat, "yaml") == 0 {
 		fakerBytes, err := yaml.Marshal(fakes)
 		if err != nil {

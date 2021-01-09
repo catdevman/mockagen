@@ -36,9 +36,9 @@ columns:
   null_percentage: 10
   type: Custom List
   values:
-  - one
-  - two
-  - three
+  - 1
+  - 2
+  - 3
   selectionStyle: random
   distribution:
   formula: ''
