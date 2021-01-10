@@ -49,9 +49,9 @@
       "null_percentage": 10,
       "type": "Custom List",
       "values": [
-        1,
-        2,
-        3
+        "1",
+        "2",
+        "3"
       ],
       "selectionStyle": "random",
       "distribution": null,
