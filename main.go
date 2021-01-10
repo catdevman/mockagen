@@ -53,7 +53,7 @@ func main() {
 
 	fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
 	var fakes = []interface{}{}
-	for i := 0; i < config.NumberOfRows; i++ {
+	for i := 0; i < config.NumberOfRecords; i++ {
 		err := faker.FakeData(&fakerInterface)
 		if err != nil {
 			panic(err)

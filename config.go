@@ -2,11 +2,11 @@ package main
 
 // MockadooConfig -
 type MockadooConfig struct {
-	NumberOfRows  int              `yaml:"num_rows" json:"num_rows"`
-	FileFormat    string           `yaml:"file_format" json:"file_format"`
-	Name          string           `yaml:"name" json:"name"`
-	IncludeHeader bool             `yaml:"include_header" json:"include_header"`
-	Columns       []MockadooColumn `yaml:"columns" json:"columns"`
+	NumberOfRecords int              `yaml:"num_rows" json:"num_rows"`
+	FileFormat      string           `yaml:"file_format" json:"file_format"`
+	Name            string           `yaml:"name" json:"name"`
+	IncludeHeader   bool             `yaml:"include_header" json:"include_header"`
+	Columns         []MockadooColumn `yaml:"columns" json:"columns"`
 }
 
 // MockadooColumn -
