@@ -15,7 +15,6 @@ type strSlice []string
 func (list strSlice) has(a string) bool {
 	for _, b := range list {
 		if b == a {
-
 			return true
 		}
 	}
