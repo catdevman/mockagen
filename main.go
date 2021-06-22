@@ -61,13 +61,14 @@ func main() {
 		fakes = append(fakes, reflect.ValueOf(fakerInterface).Interface())
 	}
 
-	if strings.Compare(config.FileFormat, "yaml") == 0 {
+	switch config.FileFormat {
+	case "yaml":
 		fakerBytes, err := yaml.Marshal(fakes)
 		if err != nil {
 			panic(err)
 		}
 		ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
-	} else if strings.Compare(config.FileFormat, "json") == 0 {
+	case "json":
 		fakerBytes, err := json.Marshal(fakes)
 		if err != nil {
 			panic(err)
