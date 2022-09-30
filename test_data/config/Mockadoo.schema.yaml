@@ -1,6 +1,6 @@
 ---
 id: 281757
-num_rows: 100000
+num_rows: 1000000
 file_format: yaml
 name: Data Generator Schema
 include_header: true

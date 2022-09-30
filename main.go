@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/bxcodec/faker/v3"
 	yaml "gopkg.in/yaml.v3"
@@ -51,14 +52,28 @@ func main() {
 		})
 	}
 
-	fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
 	var fakes = []interface{}{}
+	fakesCh := make(chan interface{}, config.NumberOfRecords)
+	var wg sync.WaitGroup
+	wg.Add(config.NumberOfRecords)
 	for i := 0; i < config.NumberOfRecords; i++ {
-		err := faker.FakeData(&fakerInterface)
-		if err != nil {
-			panic(err)
-		}
-		fakes = append(fakes, reflect.ValueOf(fakerInterface).Interface())
+		go func() {
+			fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
+			err := faker.FakeData(&fakerInterface)
+			if err != nil {
+				panic(err)
+			}
+			fakesCh <- reflect.ValueOf(fakerInterface).Interface()
+			wg.Done()
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(fakesCh)
+	}()
+
+	for fake := range fakesCh {
+		fakes = append(fakes, fake)
 	}
 
 	switch config.FileFormat {
@@ -67,13 +82,19 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		err = ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		if err != nil {
+			panic(err)
+		}
 	case "json":
 		fakerBytes, err := json.Marshal(fakes)
 		if err != nil {
 			panic(err)
 		}
-		ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		err = ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 }
