@@ -53,7 +53,7 @@ func main() {
 	}
 
 	var fakes = []interface{}{}
-	fakesCh := make(chan interface{}, config.NumberOfRecords)
+	fakesCh := make(chan interface{}, 100)
 	var wg sync.WaitGroup
 	wg.Add(config.NumberOfRecords)
 	for i := 0; i < config.NumberOfRecords; i++ {
