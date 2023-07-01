@@ -1,16 +1,16 @@
 package main
 
-// MockadooConfig -
-type MockadooConfig struct {
+// LocaldooConfig -
+type LocaldooConfig struct {
 	NumberOfRecords int              `yaml:"num_rows" json:"num_rows"`
 	FileFormat      string           `yaml:"file_format" json:"file_format"`
 	Name            string           `yaml:"name" json:"name"`
 	IncludeHeader   bool             `yaml:"include_header" json:"include_header"`
-	Columns         []MockadooColumn `yaml:"columns" json:"columns"`
+	Columns         []LocaldooColumn `yaml:"columns" json:"columns"`
 }
 
-// MockadooColumn -
-type MockadooColumn struct {
+// LocaldooColumn -
+type LocaldooColumn struct {
 	Name           string   `yaml:"name" json:"name"`
 	NullPercentage int64    `yaml:"null_percentage" json:"null_percentage"`
 	Type           string   `yaml:"type" json:"type"`

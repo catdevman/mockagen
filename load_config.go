@@ -22,7 +22,7 @@ func (list strSlice) has(a string) bool {
 }
 
 // LoadConfig -
-func LoadConfig(p string) MockadooConfig {
+func LoadConfig(p string) LocaldooConfig {
 	var allowedExt = strSlice{".yaml", ".json"}
 	_, file := filepath.Split(p)
 	if ext := filepath.Ext(file); !allowedExt.has(ext) {
@@ -33,7 +33,7 @@ func LoadConfig(p string) MockadooConfig {
 	if err != nil {
 		panic("Issue opening file.")
 	}
-	config := MockadooConfig{}
+	config := LocaldooConfig{}
 	switch filepath.Ext(file) {
 	case ".yaml":
 		err = yaml.NewDecoder(bufio.NewReader(f)).Decode(&config)

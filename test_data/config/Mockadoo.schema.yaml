@@ -33,7 +33,7 @@ columns:
   format: "%Y/%m/%d"
   formula: ''
 - name: custom
-  null_percentage: 10
+  null_percentage: 0
   type: Custom List
   values:
   - 1
