@@ -1,6 +1,6 @@
 module gitlab.com/catdevman/data-generator
 
-go 1.18
+go 1.21
 
 require (
 	github.com/bxcodec/faker/v3 v3.5.0

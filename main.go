@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"strings"
@@ -41,7 +40,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		err = ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
 		if err != nil {
 			panic(err)
 		}
@@ -50,7 +49,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		err = ioutil.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
 		if err != nil {
 			panic(err)
 		}
