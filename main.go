@@ -65,7 +65,8 @@ func generateFakes(config LocaldooConfig) []any {
 		if col.Type == "Custom List" {
 			fakerStr += strings.Join(col.Values, ",")
 		}
-		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", fakerStr, strings.ToLower(col.Name), strings.ToLower(col.Name), strings.ToLower(col.Name))
+        lower := strings.ToLower(col.Name)
+		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", fakerStr, lower, lower, lower)
 		tag := reflect.StructTag(tagStr) // This should also have info for json, csv, yaml tags
 		t := reflect.TypeOf("")
 		// fmt.Println(name, tag, t)
