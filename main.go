@@ -32,7 +32,7 @@ func main() {
 	// - Check if config is legit
 	config := LoadConfig(configFile)
 	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), config.FileFormat)
-    fakes := generateFakes(config)
+	fakes := generateFakes(config)
 
 	switch config.FileFormat {
 	case "yaml":
@@ -56,7 +56,7 @@ func main() {
 	}
 }
 
-func generateFakes(config LocaldooConfig) []any{
+func generateFakes(config LocaldooConfig) []any {
 	structArr := []reflect.StructField{}
 	for _, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
@@ -100,5 +100,5 @@ func generateFakes(config LocaldooConfig) []any{
 	for fake := range fakesCh {
 		fakes = append(fakes, fake)
 	}
-    return fakes
+	return fakes
 }
