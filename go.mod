@@ -1,4 +1,4 @@
-module gitlab.com/catdevman/mockagen
+module github.com/catdevman/mockagen
 
 go 1.21
 
