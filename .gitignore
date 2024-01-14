@@ -1,4 +1,4 @@
 output/*
-./data-generator
-./mockagen
-./main
+data-generator
+mockagen
+main
