@@ -1,3 +1,7 @@
+github.com/bxcodec/faker/v3 v3.8.1 h1:qO/Xq19V6uHt2xujwpaetgKhraGCapqY2CRWGD/SqcM=
+github.com/bxcodec/faker/v3 v3.8.1/go.mod h1:DdSDccxF5msjFo5aO4vrobRQ8nIApg8kq3QWPEQD6+o=
+github.com/catdevman/mockagen v0.0.0-20240114230502-6d3a574cecc1 h1:78apQesxysbEVhNBl5DLaziUkigvqxaypCWzlp69BLs=
+github.com/catdevman/mockagen v0.0.0-20240114230502-6d3a574cecc1/go.mod h1:Yvu9ADvAnwPNWLnjoKDcCsBMml+vuXSyUxPOakJEQU0=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=

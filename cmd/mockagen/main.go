@@ -82,15 +82,19 @@ func generateFakes(config mockagen.LocaldooConfig) []any {
 	//fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
 	fakesCh := make(chan any)
 	var wg sync.WaitGroup
-	wg.Add(config.NumberOfRecords)
-	for i := 0; i < config.NumberOfRecords; i++ {
+    numOfWorkers := 50
+    recordsPerGo := config.NumberOfRecords / numOfWorkers
+	wg.Add(numOfWorkers)
+    for i := 0; i < numOfWorkers; i++ {
 		go func() {
 			fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
-			err := faker.FakeData(&fakerInterface)
-			if err != nil {
-				panic(err)
-			}
-			fakesCh <- reflect.ValueOf(fakerInterface).Interface()
+            for x := 0; x < recordsPerGo; x++ {
+                err := faker.FakeData(&fakerInterface)
+                if err != nil {
+                    panic(err)
+                }
+                fakesCh <- reflect.ValueOf(fakerInterface).Interface()
+            }
 			wg.Done()
 		}()
 	}
