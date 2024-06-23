@@ -1,16 +1,16 @@
 package pkg
 
-// LocaldooConfig -
-type LocaldooConfig struct {
+// MockagenConfig -
+type MockagenConfig struct {
 	NumberOfRecords int              `yaml:"num_rows" json:"num_rows"`
 	FileFormat      string           `yaml:"file_format" json:"file_format"`
 	Name            string           `yaml:"name" json:"name"`
 	IncludeHeader   bool             `yaml:"include_header" json:"include_header"`
-	Columns         []LocaldooColumn `yaml:"columns" json:"columns"`
+	Columns         []MockagenColumn `yaml:"columns" json:"columns"`
 }
 
-// LocaldooColumn -
-type LocaldooColumn struct {
+// MockagenColumn -
+type MockagenColumn struct {
 	Name           string   `yaml:"name" json:"name"`
 	NullPercentage int64    `yaml:"null_percentage" json:"null_percentage"`
 	Type           string   `yaml:"type" json:"type"`
