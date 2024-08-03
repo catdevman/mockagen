@@ -1,0 +1,63 @@
+{
+  "id": 281757,
+  "num_rows": 1,
+  "file_format": "fixed",
+  "name": "single",
+  "include_header": true,
+  "columns": [
+    {
+      "name": "id",
+      "type": "GUID",
+      "startPosition": 1,
+      "endPosition": 36
+    },
+    {
+      "name": "first_name",
+      "type": "First Name",
+      "startPosition": 37,
+      "endPosition": 62
+    },
+    {
+      "name": "last_name",
+      "type": "Last Name",
+      "startPosition": 63,
+      "endPosition": 88
+    },
+    {
+      "name": "email",
+      "type": "Email Address",
+      "startPosition": 89,
+      "endPosition": 114
+    },
+    {
+      "name": "gender",
+      "type": "Gender",
+      "startPosition": 115,
+      "endPosition": 121
+    },
+    {
+      "name": "date",
+      "type": "Datetime",
+      "min": "12/24/2019",
+      "max": "12/23/2020",
+      "format": "%Y/%m/%d",
+      "startPosition": 122,
+      "endPosition": 132
+
+    },
+    {
+      "name": "custom",
+      "type": "Custom List",
+      "values": [
+        "1",
+        "2",
+        "3"
+      ],
+      "selectionStyle": "random",
+      "distribution": null,
+      "formula": "",
+      "startPosition": 133,
+      "endPosition": 134
+    }
+  ]
+}

@@ -9,8 +9,9 @@ import (
 	"strings"
 	"sync"
 
-    mockagen "github.com/catdevman/mockagen/pkg"
-	"github.com/bxcodec/faker/v3"
+	"github.com/catdevman/mockagen/pkg/mockagen"
+	"github.com/go-faker/faker/v4"
+	fixed "github.com/ianlopshire/go-fixedwidth"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -30,7 +31,7 @@ func main() {
 	// Need arguments:
 	flag.StringVar(&configFile, "config", "", "")
 	flag.Parse()
-	// - Check if config is legit
+	// Check if config is legit
 	config := mockagen.LoadConfig(configFile)
 	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), config.FileFormat)
 	fakes := generateFakes(config)
@@ -54,10 +55,20 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+	case "fixed":
+		fakerBytes, err := fixed.Marshal(fakes)
+		if err != nil {
+			panic(err)
+		}
+		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		if err != nil {
+			panic(err)
+		}
+
 	}
 }
 
-func generateFakes(config mockagen.LocaldooConfig) []any {
+func generateFakes(config mockagen.MockagenConfig) []any {
 	structArr := []reflect.StructField{}
 	for _, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
@@ -66,11 +77,14 @@ func generateFakes(config mockagen.LocaldooConfig) []any {
 		if col.Type == "Custom List" {
 			fakerStr += strings.Join(col.Values, ",")
 		}
-        lower := strings.ToLower(col.Name)
+		lower := strings.ToLower(col.Name)
 		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", fakerStr, lower, lower, lower)
+		if config.FileFormat == "fixed" {
+			tagStr += fmt.Sprintf(" fixed:\"%d,%d\"", col.StartPosition, col.EndPosition)
+		}
 		tag := reflect.StructTag(tagStr) // This should also have info for json, csv, yaml tags
 		t := reflect.TypeOf("")
-		// fmt.Println(name, tag, t)
+
 		structArr = append(structArr, reflect.StructField{
 			Name: name,
 			Type: t,
@@ -79,22 +93,24 @@ func generateFakes(config mockagen.LocaldooConfig) []any {
 	}
 
 	var fakes = []any{}
-	//fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
 	fakesCh := make(chan any)
 	var wg sync.WaitGroup
-    numOfWorkers := 50
-    recordsPerGo := config.NumberOfRecords / numOfWorkers
+	numOfWorkers := 48
+	if config.NumberOfRecords < numOfWorkers {
+		numOfWorkers = config.NumberOfRecords
+	}
+	recordsPerGo := config.NumberOfRecords / numOfWorkers
 	wg.Add(numOfWorkers)
-    for i := 0; i < numOfWorkers; i++ {
+	for i := 0; i < numOfWorkers; i++ {
 		go func() {
 			fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
-            for x := 0; x < recordsPerGo; x++ {
-                err := faker.FakeData(&fakerInterface)
-                if err != nil {
-                    panic(err)
-                }
-                fakesCh <- reflect.ValueOf(fakerInterface).Interface()
-            }
+			for x := 0; x < recordsPerGo; x++ {
+				err := faker.FakeData(&fakerInterface)
+				if err != nil {
+					panic(err)
+				}
+				fakesCh <- reflect.ValueOf(fakerInterface).Interface()
+			}
 			wg.Done()
 		}()
 	}
