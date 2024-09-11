@@ -64,6 +64,15 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+	case "parquet":
+		fakerBytes, err := fixed.Marshal(fakes)
+		if err != nil {
+			panic(err)
+		}
+		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
+		if err != nil {
+			panic(err)
+		}
 
 	}
 }
