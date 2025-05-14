@@ -11,20 +11,9 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-type strSlice []string
-
-func (list strSlice) has(a string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 // LoadConfig -
 func LoadConfig(p string) MockagenConfig {
-	var allowedExt = strSlice{".yaml", ".json"}
+	var allowedExt = []string{".yaml", ".json"}
 	_, file := filepath.Split(p)
 	if ext := filepath.Ext(file); !slices.Contains(allowedExt, ext) {
 		fmt.Println("File type was:", ext)
