@@ -3,3 +3,6 @@ build: clean
 
 clean:
 	rm -rf mockagen
+
+test:
+	go test ./...
