@@ -1,0 +1,48 @@
+{
+  "id": 281757,
+  "num_rows": 10000,
+  "file_format": "parquet",
+  "name": "single",
+  "include_header": true,
+  "columns": [
+    {
+      "name": "id",
+      "type": "GUID"
+    },
+    {
+      "name": "first_name",
+      "type": "First Name"
+    },
+    {
+      "name": "last_name",
+      "type": "Last Name"
+    },
+    {
+      "name": "email",
+      "type": "Email Address"
+    },
+    {
+      "name": "gender",
+      "type": "Gender"
+    },
+    {
+      "name": "date",
+      "type": "Datetime",
+      "min": "12/24/2019",
+      "max": "12/23/2020",
+      "format": "%Y/%m/%d"
+    },
+    {
+      "name": "custom",
+      "type": "Custom List",
+      "values": [
+        "1",
+        "2",
+        "3"
+      ],
+      "selectionStyle": "random",
+      "distribution": null,
+      "formula": ""
+    }
+  ]
+}
