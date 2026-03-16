@@ -8,27 +8,17 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/BurntSushi/toml"
 	yaml "gopkg.in/yaml.v3"
 )
 
-type strSlice []string
-
-func (list strSlice) has(a string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 // LoadConfig -
 func LoadConfig(p string) MockagenConfig {
-	var allowedExt = strSlice{".yaml", ".json"}
+	allowedExt := []string{".yaml", ".json", ".toml"}
 	_, file := filepath.Split(p)
 	if ext := filepath.Ext(file); !slices.Contains(allowedExt, ext) {
 		fmt.Println("File type was:", ext)
-		panic("Config files can only be yaml or json.")
+		panic("Config files can only be yaml, json, or toml.")
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -40,6 +30,8 @@ func LoadConfig(p string) MockagenConfig {
 		err = yaml.NewDecoder(bufio.NewReader(f)).Decode(&config)
 	case ".json":
 		err = json.NewDecoder(bufio.NewReader(f)).Decode(&config)
+	case ".toml":
+		_, err = toml.NewDecoder(f).Decode(&config)
 	}
 	if err != nil {
 		panic("Issue decoding config file")
