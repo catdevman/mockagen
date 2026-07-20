@@ -128,11 +128,16 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 		numOfWorkers = config.NumberOfRecords
 	}
 	recordsPerGo := config.NumberOfRecords / numOfWorkers
+	remainder := config.NumberOfRecords % numOfWorkers
 	wg.Add(numOfWorkers)
 	for i := 0; i < numOfWorkers; i++ {
-		go func() {
+		n := recordsPerGo
+		if i < remainder {
+			n++
+		}
+		go func(n int) {
 			fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
-			for x := 0; x < recordsPerGo; x++ {
+			for x := 0; x < n; x++ {
 				err := faker.FakeData(&fakerInterface)
 				if err != nil {
 					panic(err)
@@ -140,7 +145,7 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 				fakesCh <- reflect.ValueOf(fakerInterface).Interface()
 			}
 			wg.Done()
-		}()
+		}(n)
 	}
 	go func() {
 		wg.Wait()
