@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/catdevman/mockagen/pkg/mockagen"
 	"github.com/go-faker/faker/v4"
@@ -77,11 +78,27 @@ func main() {
 	}
 }
 
+// structFieldName turns an arbitrary column name into a valid, unique
+// exported Go struct field identifier for use with reflect.StructOf.
+func structFieldName(colName string, idx int) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(colName) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	name := b.String()
+	if name == "" || unicode.IsDigit(rune(name[0])) {
+		name = "F" + name
+	}
+	return fmt.Sprintf("%s_%d", name, idx)
+}
+
 func generateFakes(config mockagen.MockagenConfig) []any {
 	structArr := []reflect.StructField{}
-	for _, col := range config.Columns {
+	for i, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
-		name := strings.ToUpper(col.Name)
+		name := structFieldName(col.Name, i)
 		fakerStr := mapToFaker[col.Type]
 		if col.Type == "Custom List" {
 			fakerStr += strings.Join(col.Values, ",")
@@ -102,6 +119,9 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 	}
 
 	var fakes = []any{}
+	if config.NumberOfRecords <= 0 {
+		return fakes
+	}
 	fakesCh := make(chan any)
 	var wg sync.WaitGroup
 	numOfWorkers := 48
