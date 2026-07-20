@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strings"
@@ -11,20 +12,58 @@ import (
 	"unicode"
 
 	"github.com/catdevman/mockagen/pkg/mockagen"
+	"github.com/catdevman/mockagen/pkg/mockagen/provider"
 	"github.com/go-faker/faker/v4"
 	fixed "github.com/ianlopshire/go-fixedwidth"
 	yaml "gopkg.in/yaml.v3"
 )
 
 var configFile string
+
+// mapToFaker maps Mockaroo schema type names to go-faker struct tags.
+// Only faker tags that resolve to a plain string are safe here: every
+// generated struct field is typed as Go string (see generateFakes)
 var mapToFaker = map[string]string{
-	"GUID":          "uuid_hyphenated",
-	"First Name":    "first_name",
-	"Last Name":     "last_name",
-	"Email Address": "email",
-	"Gender":        "oneof: male,female",
-	"Datetime":      "date",
-	"Custom List":   "oneof:",
+	"GUID":                 "uuid_hyphenated",
+	"First Name":           "first_name",
+	"Last Name":            "last_name",
+	"Full Name":            "name",
+	"Email Address":        "email",
+	"Gender":               "oneof: male,female",
+	"Datetime":             "date",
+	"Custom List":          "oneof:",
+	"Username":             "username",
+	"URL":                  "url",
+	"Domain Name":          "domain_name",
+	"IP Address":           "ipv4",
+	"IPv6 Address":         "ipv6",
+	"MAC Address":          "mac_address",
+	"Phone":                "phone_number",
+	"Toll-Free Phone":      "toll_free_number",
+	"Phone (E.164)":        "e_164_phone_number",
+	"Credit Card Number":   "cc_number",
+	"Credit Card Type":     "cc_type",
+	"Currency Code":        "currency",
+	"Amount with Currency": "amount_with_currency",
+	"Time":                 "time",
+	"Day of Week":          "day_of_week",
+	"Day of Month":         "day_of_month",
+	"Month":                "month_name",
+	"Year":                 "year",
+	"Century":              "century",
+	"Time Zone":            "timezone",
+	"Time Period":          "time_period",
+	"Word":                 "word",
+	"Sentence":             "sentence",
+	"Paragraph":            "paragraph",
+	"Title (Male)":         "title_male",
+	"Title (Female)":       "title_female",
+}
+
+// mockagen-specific types that go-faker has no built-in generator for
+// (registered via faker.AddProvider in pkg/mockagen/provider's init).
+func init() {
+	maps.Copy(mapToFaker, provider.TypeMap)
 }
 
 func main() {
