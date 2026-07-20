@@ -17,7 +17,6 @@ import (
 )
 
 var configFile string
-var outputFile string
 var mapToFaker = map[string]string{
 	"GUID":          "uuid_hyphenated",
 	"First Name":    "first_name",
