@@ -10,9 +10,9 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/catdevman/faker"
 	"github.com/catdevman/mockagen/pkg/mockagen"
 	"github.com/catdevman/mockagen/pkg/mockagen/provider"
-	"github.com/go-faker/faker/v4"
 )
 
 var configFile string
