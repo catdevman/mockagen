@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/go-faker/faker/v4"
+	"github.com/catdevman/faker"
 )
 
 // TypeMap maps Mockaroo schema type names to the faker tags this package
