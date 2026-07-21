@@ -1,0 +1,51 @@
+num_rows = 1
+file_format = "json"
+name = "single"
+include_header = true
+
+[[columns]]
+name = "id"
+null_percentage = 0
+type = "GUID"
+formula = "upper(this)"
+
+[[columns]]
+name = "first_name"
+null_percentage = 0
+type = "First Name"
+formula = ""
+
+[[columns]]
+name = "last_name"
+null_percentage = 0
+type = "Last Name"
+formula = ""
+
+[[columns]]
+name = "email"
+null_percentage = 0
+type = "Email Address"
+formula = ""
+
+[[columns]]
+name = "gender"
+null_percentage = 10
+type = "Gender"
+formula = ""
+
+[[columns]]
+name = "date"
+null_percentage = 10
+type = "Datetime"
+min = "12/24/2019"
+max = "12/23/2020"
+format = "%Y/%m/%d"
+formula = ""
+
+[[columns]]
+name = "custom"
+null_percentage = 10
+type = "Custom List"
+values = ["1", "2", "3"]
+selectionStyle = "random"
+formula = ""

@@ -45,4 +45,14 @@ mv mockagen <somewhere_in_your_path>
 ## Usage
 `mockagen -config <config_file_path>`
 
-You can look at `test_data` directory for example configuration files
+You can look at `test_data` directory for example configuration files.
+
+## Config file formats
+
+The `-config` flag accepts any of the following formats:
+
+| Extension | Format |
+|---|---|
+| `.json` | JSON |
+| `.yaml` | YAML |
+| `.toml` | TOML |
