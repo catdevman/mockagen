@@ -8,6 +8,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require github.com/BurntSushi/toml v1.6.0
+
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/catdevman/faker v0.0.0-20260721005343-dda8eb397c8b
