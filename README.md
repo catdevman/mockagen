@@ -6,9 +6,41 @@ My goal is to make it compatable with Mockaroo's schema format.  It does
 not currently have all the same functionality.
 
 ## Install
-- `git clone https://github.com/catdevman/mockagen`
-- `make` (in the root of the directory)
-- `mv mockagen <somewhere_in_your_path>`
+
+### Using go install (recommended)
+
+Requires Go 1.26 or later. This fetches, compiles, and installs the binary
+into `$GOBIN` (default `$GOPATH/bin`, usually `~/go/bin`):
+
+```
+go install github.com/catdevman/mockagen/cmd/mockagen@latest
+```
+
+To install a specific version:
+
+```
+go install github.com/catdevman/mockagen/cmd/mockagen@v0.1.0
+```
+
+Make sure `$GOBIN` is on your `$PATH` so the `mockagen` command is available:
+
+```
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+### Download a pre-built binary
+
+Pre-built binaries for Linux, macOS, and Windows are available on the
+[Releases](https://github.com/catdevman/mockagen/releases) page.
+
+### Build from source
+
+```
+git clone https://github.com/catdevman/mockagen
+cd mockagen
+make
+mv mockagen <somewhere_in_your_path>
+```
 
 ## Usage
 `mockagen -config <config_file_path>`
