@@ -10,7 +10,7 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/catdevman/faker v0.0.0
+	github.com/catdevman/faker v0.0.0-20260721005343-dda8eb397c8b
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
@@ -21,5 +21,3 @@ require (
 	golang.org/x/text v0.29.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
-
-replace github.com/catdevman/faker => ../faker
