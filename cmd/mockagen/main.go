@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"unicode"
@@ -129,13 +130,24 @@ func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.Struct
 		})
 	}
 
-	fakesCh := make(chan any)
+	// recordBufferSize gives the writer's consumer loop room to lag behind
+	// the worker pool. An unbuffered channel forces every worker to block
+	// on each send until the single consumer finishes marshaling *and
+	// writing* the previous record, which serializes generation behind
+	// disk I/O - the buffer restores the pool's parallelism while keeping
+	// memory bounded to a small, fixed number of records rather than the
+	// whole run.
+	const recordBufferSize = 4096
+	fakesCh := make(chan any, recordBufferSize)
 	if config.NumberOfRecords <= 0 {
 		close(fakesCh)
 		return fakesCh, structArr
 	}
 	var wg sync.WaitGroup
-	numOfWorkers := 48
+	// Oversubscribing beyond available cores only adds contention on
+	// go-faker's internal tag-resolution locks without adding real
+	// parallelism for this CPU-bound work.
+	numOfWorkers := runtime.NumCPU()
 	if config.NumberOfRecords < numOfWorkers {
 		numOfWorkers = config.NumberOfRecords
 	}
