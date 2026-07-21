@@ -1,5 +1,5 @@
 build: clean
-	go build -o mockagen cmd/mockagen/main.go
+	go build -o mockagen ./cmd/mockagen
 
 clean:
 	rm -rf mockagen

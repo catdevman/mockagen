@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"maps"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,8 +12,6 @@ import (
 	"github.com/catdevman/mockagen/pkg/mockagen"
 	"github.com/catdevman/mockagen/pkg/mockagen/provider"
 	"github.com/go-faker/faker/v4"
-	fixed "github.com/ianlopshire/go-fixedwidth"
-	yaml "gopkg.in/yaml.v3"
 )
 
 var configFile string
@@ -73,46 +69,19 @@ func main() {
 	// Check if config is legit
 	config := mockagen.LoadConfig(configFile)
 	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), config.FileFormat)
-	fakes := generateFakes(config)
 
-	switch config.FileFormat {
-	case "yaml":
-		fakerBytes, err := yaml.Marshal(fakes)
-		if err != nil {
+	fakesCh, structArr := generateFakes(config)
+	w, err := newRecordWriter(config, structArr, outputFile)
+	if err != nil {
+		panic(err)
+	}
+	for fake := range fakesCh {
+		if err := w.WriteRecord(fake); err != nil {
 			panic(err)
 		}
-		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
-	case "json":
-		fakerBytes, err := json.Marshal(fakes)
-		if err != nil {
-			panic(err)
-		}
-		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
-	case "fixed":
-		fakerBytes, err := fixed.Marshal(fakes)
-		if err != nil {
-			panic(err)
-		}
-		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
-	case "parquet":
-		fakerBytes, err := fixed.Marshal(fakes)
-		if err != nil {
-			panic(err)
-		}
-		err = os.WriteFile(outputFile, fakerBytes, os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
-
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
 	}
 }
 
@@ -132,7 +101,11 @@ func structFieldName(colName string, idx int) string {
 	return fmt.Sprintf("%s_%d", name, idx)
 }
 
-func generateFakes(config mockagen.MockagenConfig) []any {
+// generateFakes builds the reflected record struct for config.Columns, then
+// streams config.NumberOfRecords fake records through the returned channel
+// via a worker pool. Consuming the channel (rather than collecting it into
+// a slice) keeps memory bounded regardless of how many records are requested.
+func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.StructField) {
 	structArr := []reflect.StructField{}
 	for i, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
@@ -142,7 +115,7 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 			fakerStr += strings.Join(col.Values, ",")
 		}
 		lower := strings.ToLower(col.Name)
-		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\"", fakerStr, lower, lower, lower)
+		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\" parquet:\"%s\"", fakerStr, lower, lower, lower, lower)
 		if config.FileFormat == "fixed" {
 			tagStr += fmt.Sprintf(" fixed:\"%d,%d\"", col.StartPosition, col.EndPosition)
 		}
@@ -156,11 +129,11 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 		})
 	}
 
-	var fakes = []any{}
-	if config.NumberOfRecords <= 0 {
-		return fakes
-	}
 	fakesCh := make(chan any)
+	if config.NumberOfRecords <= 0 {
+		close(fakesCh)
+		return fakesCh, structArr
+	}
 	var wg sync.WaitGroup
 	numOfWorkers := 48
 	if config.NumberOfRecords < numOfWorkers {
@@ -191,8 +164,5 @@ func generateFakes(config mockagen.MockagenConfig) []any {
 		close(fakesCh)
 	}()
 
-	for fake := range fakesCh {
-		fakes = append(fakes, fake)
-	}
-	return fakes
+	return fakesCh, structArr
 }
