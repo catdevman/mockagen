@@ -41,7 +41,13 @@ func BenchmarkGenerateFakes(b *testing.B) {
 		b.Run(fmt.Sprintf("generate_fake_%d", size), func(b *testing.B) {
 			config.NumberOfRecords = size
 			for i := 0; i < b.N; i++ {
-				generateFakes(config)
+				// The channel must be drained. generateFakes returns as soon as
+				// the workers are spawned, so leaving it unconsumed measured
+				// only the setup cost while leaking a blocked worker pool per
+				// iteration - which exhausts memory once b.N grows.
+				fakesCh, _ := generateFakes(config)
+				for range fakesCh {
+				}
 			}
 		})
 	}

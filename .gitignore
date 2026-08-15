@@ -3,3 +3,5 @@ data-generator
 /mockagen
 main
 /dist
+bench-results/
+.bench-base/
