@@ -37,15 +37,16 @@ jobs:
       regressed: ${{ steps.report.outputs.regressed }}
       regression_count: ${{ steps.report.outputs.regression_count }}
     steps:
+      # Checked out at the workspace root, not a subdirectory: the gh-pages
+      # publish step runs git in $GITHUB_WORKSPACE, so the repo has to live
+      # there or it fails with "not a git repository".
       - name: Check out head
         uses: actions/checkout@v4
         with:
-          path: head
           fetch-depth: 0
 
       - name: Resolve baseline commit
         id: base
-        working-directory: head
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -65,17 +66,18 @@ jobs:
           echo "head_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "Baseline: $base"
 
-      - name: Check out baseline into a sibling worktree
-        working-directory: head
-        run: git worktree add ../base "${{ steps.base.outputs.sha }}"
+      # Kept in RUNNER_TEMP rather than the workspace so the working tree stays
+      # clean for the gh-pages branch switch the publish step performs.
+      - name: Check out baseline into a worktree
+        run: git worktree add "$RUNNER_TEMP/base" "${{ steps.base.outputs.sha }}"
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           # Pinned by go.mod so a toolchain bump is a deliberate, visible change
           # rather than a mystery step in the graph.
-          go-version-file: head/go.mod
-          cache-dependency-path: head/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Install benchstat
         # Pinned: scripts/bench-report.go parses benchstat's CSV layout, so an
@@ -92,38 +94,40 @@ jobs:
 
       - name: Run interleaved A/B benchmarks
         env:
-          BASE_DIR: ${{ github.workspace }}/base
-          HEAD_DIR: ${{ github.workspace }}/head
-          OUT_DIR: ${{ github.workspace }}/bench-results
+          BASE_DIR: ${{ runner.temp }}/base
+          HEAD_DIR: ${{ github.workspace }}
+          OUT_DIR: ${{ runner.temp }}/bench-results
           ROUNDS: ${{ github.event.inputs.rounds || '8' }}
-        run: bash head/scripts/bench-ab.sh
+        run: bash scripts/bench-ab.sh
 
       - name: Compare
         id: report
+        env:
+          RESULTS: ${{ runner.temp }}/bench-results
         run: |
           set -euo pipefail
           benchstat -format=csv \
-            base=bench-results/base.txt \
-            head=bench-results/head.txt \
-            > bench-results/compare.csv 2> bench-results/benchstat.log || true
-          # Built from inside the module (the workspace root has no go.mod), so
-          # the tool never depends on go run's behaviour outside a module.
-          (cd head && go build -o "$GITHUB_WORKSPACE/bench-report" scripts/bench-report.go)
-          ./bench-report \
-            --csv bench-results/compare.csv \
-            --out bench-results/report.md \
+            base="$RESULTS/base.txt" \
+            head="$RESULTS/head.txt" \
+            > "$RESULTS/compare.csv" 2> "$RESULTS/benchstat.log" || true
+          # Built to RUNNER_TEMP so no stray binary sits in the working tree
+          # when the publish step switches branches.
+          go build -o "$RUNNER_TEMP/bench-report" scripts/bench-report.go
+          "$RUNNER_TEMP/bench-report" \
+            --csv "$RESULTS/compare.csv" \
+            --out "$RESULTS/report.md" \
             --base-label "${{ steps.base.outputs.short }}" \
             --head-label "${{ steps.base.outputs.head_short }}" \
             --title "Benchmark comparison" \
-            --emit-go-bench bench-results/dashboard.txt \
+            --emit-go-bench "$RESULTS/dashboard.txt" \
             --github-output "$GITHUB_OUTPUT"
-          cat bench-results/report.md >> "$GITHUB_STEP_SUMMARY"
+          cat "$RESULTS/report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload raw results
         uses: actions/upload-artifact@v4
         with:
           name: bench-results-${{ steps.base.outputs.head_short }}
-          path: bench-results/
+          path: ${{ runner.temp }}/bench-results/
           retention-days: 90
 
       # ---- Notify -----------------------------------------------------------
@@ -136,16 +140,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
           MARKER: "<!-- mockagen-benchmark-report -->"
+          RESULTS: ${{ runner.temp }}/bench-results
         run: |
           set -euo pipefail
-          { echo "$MARKER"; cat bench-results/report.md; } > body.md
+          { echo "$MARKER"; cat "$RESULTS/report.md"; } > "$RUNNER_TEMP/body.md"
+          body="$RUNNER_TEMP/body.md"
           # Edit the existing report instead of stacking a new comment per push.
           id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
                  --jq "[.[] | select(.body | contains(\"$MARKER\"))] | last | .id // empty")
           if [ -n "$id" ]; then
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@body.md
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@"$body"
           else
-            gh api -X POST "repos/${{ github.repository }}/issues/$PR/comments" -F body=@body.md
+            gh api -X POST "repos/${{ github.repository }}/issues/$PR/comments" -F body=@"$body"
           fi
 
       - name: Ensure gh-pages branch exists
@@ -178,7 +184,7 @@ jobs:
         with:
           name: mockagen
           tool: go
-          output-file-path: bench-results/dashboard.txt
+          output-file-path: ${{ runner.temp }}/bench-results/dashboard.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
