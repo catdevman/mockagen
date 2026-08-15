@@ -107,7 +107,7 @@ func structFieldName(colName string, idx int) string {
 // via a worker pool. Consuming the channel (rather than collecting it into
 // a slice) keeps memory bounded regardless of how many records are requested.
 func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.StructField) {
-	structArr := []reflect.StructField{}
+	structArr := make([]reflect.StructField, 0, len(config.Columns))
 	for i, col := range config.Columns {
 		// Map col to faker type to create reflected Struct
 		name := structFieldName(col.Name, i)
@@ -144,15 +144,26 @@ func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.Struct
 		return fakesCh, structArr
 	}
 	var wg sync.WaitGroup
-	// Oversubscribing beyond available cores only adds contention on
-	// go-faker's internal tag-resolution locks without adding real
-	// parallelism for this CPU-bound work.
-	numOfWorkers := runtime.NumCPU()
+	// Generation is bottlenecked on faker's package-level RNG, which serialises
+	// every caller through a single mutex (see faker.NewSafeSource). Past a
+	// handful of workers the pool spends more time contending for that lock
+	// than generating records: a CPU profile of a 1000-record run put ~60% of
+	// samples in mutex lock/unlock at 24 workers, and 24 workers measured
+	// *slower* than a single one. GOMAXPROCS rather than NumCPU so container
+	// CPU limits are respected, then capped where the contention takes over.
+	const maxGenWorkers = 4
+	numOfWorkers := runtime.GOMAXPROCS(0)
+	if numOfWorkers > maxGenWorkers {
+		numOfWorkers = maxGenWorkers
+	}
 	if config.NumberOfRecords < numOfWorkers {
 		numOfWorkers = config.NumberOfRecords
 	}
 	recordsPerGo := config.NumberOfRecords / numOfWorkers
 	remainder := config.NumberOfRecords % numOfWorkers
+	// Built once rather than inside every worker: reflect.StructOf walks the
+	// field list and consults a global type cache on each call.
+	recordType := reflect.StructOf(structArr)
 	wg.Add(numOfWorkers)
 	for i := 0; i < numOfWorkers; i++ {
 		n := recordsPerGo
@@ -160,15 +171,19 @@ func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.Struct
 			n++
 		}
 		go func(n int) {
-			fakerInterface := reflect.New(reflect.StructOf(structArr)).Interface()
+			defer wg.Done()
+			fakerInterface := reflect.New(recordType).Interface()
 			for x := 0; x < n; x++ {
 				err := faker.FakeData(&fakerInterface)
 				if err != nil {
 					panic(err)
 				}
-				fakesCh <- reflect.ValueOf(fakerInterface).Interface()
+				// FakeData reassigns fakerInterface to a freshly allocated
+				// record each call, so the value can be sent as-is; the old
+				// reflect.ValueOf(...).Interface() round-trip only unwrapped
+				// and rewrapped the same pointer.
+				fakesCh <- fakerInterface
 			}
-			wg.Done()
 		}(n)
 	}
 	go func() {
