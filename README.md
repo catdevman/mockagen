@@ -56,3 +56,13 @@ The `-config` flag accepts any of the following formats:
 | `.json` | JSON |
 | `.yaml` | YAML |
 | `.toml` | TOML |
+
+## Benchmarks
+
+Performance over time is tracked at
+**[catdevman.github.io/mockagen/dev/bench](https://catdevman.github.io/mockagen/dev/bench/)**.
+
+Every push to `main` runs the benchmark suite against the previous commit,
+interleaved on a single runner, and publishes the result. See
+[docs/benchmarking.md](docs/benchmarking.md) for how the comparison works and
+how to run it locally.

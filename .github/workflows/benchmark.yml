@@ -170,7 +170,7 @@ jobs:
           git -C "$tmp" init -q
           git -C "$tmp" config user.name "github-actions[bot]"
           git -C "$tmp" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          printf '# mockagen benchmarks\n\nCharts live at ./dev/bench/\n' > "$tmp/README.md"
+          printf '# mockagen benchmarks\n\nCharts: [dev/bench](./dev/bench/)\n\nPublished automatically by the Benchmarks workflow; do not edit by hand.\n' > "$tmp/README.md"
           git -C "$tmp" add README.md
           git -C "$tmp" commit -q -m "init gh-pages for benchmark results"
           git -C "$tmp" branch -M gh-pages
