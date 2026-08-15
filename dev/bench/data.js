@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786771629199,
+  "lastUpdate": 1786771786030,
   "repoUrl": "https://github.com/catdevman/mockagen",
   "entries": {
     "mockagen": [
@@ -286,6 +286,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkGenerateFakes/generate_fake_10000 - allocs/op",
             "value": 600206,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "catdevman@gmail.com",
+            "name": "Lucas Pearson",
+            "username": "catdevman"
+          },
+          "committer": {
+            "email": "catdevman@gmail.com",
+            "name": "Lucas Pearson",
+            "username": "catdevman"
+          },
+          "distinct": true,
+          "id": "44e687855d4e9fcd6546a76575b7025f606b4bed",
+          "message": "feat: keeping going",
+          "timestamp": "2026-08-15T01:27:39-04:00",
+          "tree_id": "2e270e6b678927426eabc5271988143b12c6c9e9",
+          "url": "https://github.com/catdevman/mockagen/commit/44e687855d4e9fcd6546a76575b7025f606b4bed"
+        },
+        "date": 1786771785207,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1",
+            "value": 60830,
+            "unit": "ns/op\t74638 B/op\t148 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - ns/op",
+            "value": 60830,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - B/op",
+            "value": 74638,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - allocs/op",
+            "value": 148,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10",
+            "value": 210944,
+            "unit": "ns/op\t109052 B/op\t778 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - ns/op",
+            "value": 210944,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - B/op",
+            "value": 109052,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - allocs/op",
+            "value": 778,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100",
+            "value": 1255590.5,
+            "unit": "ns/op\t343104 B/op\t6178 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - ns/op",
+            "value": 1255590.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - B/op",
+            "value": 343104,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - allocs/op",
+            "value": 6178,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000",
+            "value": 11823378.5,
+            "unit": "ns/op\t2683668 B/op\t60181 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - ns/op",
+            "value": 11823378.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - B/op",
+            "value": 2683668,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - allocs/op",
+            "value": 60181,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000",
+            "value": 114301884,
+            "unit": "ns/op\t26088702 B/op\t600208 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - ns/op",
+            "value": 114301884,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - B/op",
+            "value": 26088702,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - allocs/op",
+            "value": 600208,
             "unit": "allocs/op",
             "extra": "1 times\n4 procs"
           }
