@@ -14,7 +14,7 @@ on:
     inputs:
       rounds:
         description: "Interleaved measurement rounds per side"
-        default: "8"
+        default: "6"
 
 permissions:
   contents: write        # push the gh-pages results branch
@@ -87,7 +87,7 @@ jobs:
           echo "### Runner" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           grep -m1 'model name' /proc/cpuinfo >> "$GITHUB_STEP_SUMMARY" || true
-          echo "cores: $(nproc)  GOMAXPROCS: 2" >> "$GITHUB_STEP_SUMMARY"
+          echo "cores: $(nproc)  GOMAXPROCS: 4" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run interleaved A/B benchmarks
