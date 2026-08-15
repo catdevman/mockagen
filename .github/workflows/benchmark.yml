@@ -1,0 +1,224 @@
+name: Benchmarks
+
+# Every run measures the new commit *and* its baseline on the same runner, in
+# the same job, interleaved. GitHub-hosted runners sit on mixed hardware, so
+# absolute ns/op is not comparable between runs - only the within-run A/B delta
+# is. The gh-pages series is kept for trend watching, not for gating.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: "Interleaved measurement rounds per side"
+        default: "8"
+
+permissions:
+  contents: write        # push the gh-pages results branch
+  issues: write          # open/update the regression issue
+  pull-requests: write   # comment on the PR
+
+concurrency:
+  # Never let two benchmark jobs share a runner - that is exactly the noise
+  # this workflow is trying to control for.
+  group: benchmarks-${{ github.ref }}
+  # Superseding a PR run is fine, but every main commit should get its own
+  # data point or the historical series grows holes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      regressed: ${{ steps.report.outputs.regressed }}
+      regression_count: ${{ steps.report.outputs.regression_count }}
+    steps:
+      - name: Check out head
+        uses: actions/checkout@v4
+        with:
+          path: head
+          fetch-depth: 0
+
+      - name: Resolve baseline commit
+        id: base
+        working-directory: head
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Merge base, so the diff measured is only what the PR changed.
+            base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          else
+            before="${{ github.event.before }}"
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "$before^{commit}" 2>/dev/null; then
+              base="$before"
+            else
+              base=$(git rev-parse HEAD~1)
+            fi
+          fi
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short "$base")" >> "$GITHUB_OUTPUT"
+          echo "head_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Baseline: $base"
+
+      - name: Check out baseline into a sibling worktree
+        working-directory: head
+        run: git worktree add ../base "${{ steps.base.outputs.sha }}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pinned by go.mod so a toolchain bump is a deliberate, visible change
+          # rather than a mystery step in the graph.
+          go-version-file: head/go.mod
+          cache-dependency-path: head/go.sum
+
+      - name: Install benchstat
+        # Pinned: scripts/bench-report.go parses benchstat's CSV layout, so an
+        # unattended upgrade could silently change the report format.
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260813145340-fd4a688df892
+
+      - name: Record runner hardware
+        run: |
+          echo "### Runner" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -m1 'model name' /proc/cpuinfo >> "$GITHUB_STEP_SUMMARY" || true
+          echo "cores: $(nproc)  GOMAXPROCS: 2" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run interleaved A/B benchmarks
+        env:
+          BASE_DIR: ${{ github.workspace }}/base
+          HEAD_DIR: ${{ github.workspace }}/head
+          OUT_DIR: ${{ github.workspace }}/bench-results
+          ROUNDS: ${{ github.event.inputs.rounds || '8' }}
+        run: bash head/scripts/bench-ab.sh
+
+      - name: Compare
+        id: report
+        run: |
+          set -euo pipefail
+          benchstat -format=csv \
+            base=bench-results/base.txt \
+            head=bench-results/head.txt \
+            > bench-results/compare.csv 2> bench-results/benchstat.log || true
+          # Built from inside the module (the workspace root has no go.mod), so
+          # the tool never depends on go run's behaviour outside a module.
+          (cd head && go build -o "$GITHUB_WORKSPACE/bench-report" scripts/bench-report.go)
+          ./bench-report \
+            --csv bench-results/compare.csv \
+            --out bench-results/report.md \
+            --base-label "${{ steps.base.outputs.short }}" \
+            --head-label "${{ steps.base.outputs.head_short }}" \
+            --title "Benchmark comparison" \
+            --emit-go-bench bench-results/dashboard.txt \
+            --github-output "$GITHUB_OUTPUT"
+          cat bench-results/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ steps.base.outputs.head_short }}
+          path: bench-results/
+          retention-days: 90
+
+      # ---- Notify -----------------------------------------------------------
+
+      - name: Comment on the pull request
+        # Fork PRs get a read-only token, so posting would fail; the report is
+        # still in the job summary and the uploaded artifact for those.
+        if: github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          MARKER: "<!-- mockagen-benchmark-report -->"
+        run: |
+          set -euo pipefail
+          { echo "$MARKER"; cat bench-results/report.md; } > body.md
+          # Edit the existing report instead of stacking a new comment per push.
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+                 --jq "[.[] | select(.body | contains(\"$MARKER\"))] | last | .id // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@body.md
+          else
+            gh api -X POST "repos/${{ github.repository }}/issues/$PR/comments" -F body=@body.md
+          fi
+
+      - name: Ensure gh-pages branch exists
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${{ github.repository }}/branches/gh-pages" >/dev/null 2>&1; then
+            echo "gh-pages already exists"
+            exit 0
+          fi
+          # Build the orphan branch in a throwaway clone so the head worktree
+          # (and the results sitting next to it) are never touched.
+          tmp=$(mktemp -d)
+          git -C "$tmp" init -q
+          git -C "$tmp" config user.name "github-actions[bot]"
+          git -C "$tmp" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '# mockagen benchmarks\n\nCharts live at ./dev/bench/\n' > "$tmp/README.md"
+          git -C "$tmp" add README.md
+          git -C "$tmp" commit -q -m "init gh-pages for benchmark results"
+          git -C "$tmp" branch -M gh-pages
+          git -C "$tmp" remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git -C "$tmp" push -q origin gh-pages
+
+      - name: Publish to the gh-pages dashboard
+        if: github.event_name == 'push'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: mockagen
+          tool: go
+          output-file-path: bench-results/dashboard.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          # This action compares against the previously *stored* run, which is a
+          # cross-machine comparison and therefore noisy. The trustworthy signal
+          # is the same-job A/B above, so alerting here stays off.
+          comment-on-alert: false
+          fail-on-alert: false
+          alert-threshold: "200%"
+
+      - name: Open or update the regression issue
+        if: github.event_name == 'push' && steps.report.outputs.regressed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            echo "@$OWNER - benchmarks regressed on \`main\` at ${{ steps.base.outputs.head_short }}."
+            echo
+            cat bench-results/report.md
+            echo
+            echo "Commit: ${{ github.sha }}"
+            echo "Workflow run: $run_url"
+            echo "Trend: https://${OWNER}.github.io/${{ github.event.repository.name }}/dev/bench/"
+          } > issue.md
+
+          gh label create benchmark-regression --color B60205 \
+            --description "Automated benchmark regression report" 2>/dev/null || true
+
+          existing=$(gh issue list --label benchmark-regression --state open \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue.md
+          else
+            gh issue create \
+              --title "Benchmark regression on main (${{ steps.base.outputs.head_short }})" \
+              --body-file issue.md \
+              --label benchmark-regression \
+              --assignee "$OWNER"
+          fi
