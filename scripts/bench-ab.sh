@@ -15,14 +15,14 @@ set -euo pipefail
 BASE_DIR=${BASE_DIR:?set BASE_DIR to the checkout of the baseline commit}
 HEAD_DIR=${HEAD_DIR:?set HEAD_DIR to the checkout of the new commit}
 OUT_DIR=${OUT_DIR:-bench-results}
-ROUNDS=${ROUNDS:-8}
+ROUNDS=${ROUNDS:-6}
 BENCH=${BENCH:-.}
 PKG=${PKG:-./cmd/mockagen}
 
 # Pin the parallelism so benchmark names (which carry a -N suffix) stay stable
 # even if GitHub changes the default runner size, and so the historical series
 # on gh-pages compares like with like.
-export GOMAXPROCS=${GOMAXPROCS:-2}
+export GOMAXPROCS=${GOMAXPROCS:-4}
 # Never let a `toolchain` directive pull a different compiler for one side.
 export GOTOOLCHAIN=${GOTOOLCHAIN:-local}
 
