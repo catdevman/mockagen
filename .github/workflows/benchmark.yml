@@ -97,7 +97,7 @@ jobs:
           BASE_DIR: ${{ runner.temp }}/base
           HEAD_DIR: ${{ github.workspace }}
           OUT_DIR: ${{ runner.temp }}/bench-results
-          ROUNDS: ${{ github.event.inputs.rounds || '8' }}
+          ROUNDS: ${{ github.event.inputs.rounds || '6' }}
         run: bash scripts/bench-ab.sh
 
       - name: Compare

@@ -17,7 +17,7 @@ baseline, then `scripts/bench-ab.sh` runs them **interleaved on one runner**:
 - the order flips on alternate rounds, so neither side systematically gets the
   colder machine
 - a discarded warm-up round first, and both sides compiled before the loop
-- `GOMAXPROCS=2` and `GOTOOLCHAIN=local` pinned, so parallelism and compiler are
+- `GOMAXPROCS=4` and `GOTOOLCHAIN=local` pinned, so parallelism and compiler are
   identical on both sides and benchmark names stay stable over time
 
 Thermal drift and noisy neighbours then hit both sides roughly equally, and the
