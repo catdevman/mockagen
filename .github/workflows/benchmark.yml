@@ -201,18 +201,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
+          # The report lives in RUNNER_TEMP alongside the rest of the results,
+          # not in the workspace - same as every other step that reads it.
+          RESULTS: ${{ runner.temp }}/bench-results
         run: |
           set -euo pipefail
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="$RUNNER_TEMP/issue.md"
           {
             echo "@$OWNER - benchmarks regressed on \`main\` at ${{ steps.base.outputs.head_short }}."
             echo
-            cat bench-results/report.md
+            cat "$RESULTS/report.md"
             echo
             echo "Commit: ${{ github.sha }}"
             echo "Workflow run: $run_url"
             echo "Trend: https://${OWNER}.github.io/${{ github.event.repository.name }}/dev/bench/"
-          } > issue.md
+          } > "$body"
 
           gh label create benchmark-regression --color B60205 \
             --description "Automated benchmark regression report" 2>/dev/null || true
@@ -220,11 +224,11 @@ jobs:
           existing=$(gh issue list --label benchmark-regression --state open \
                        --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body-file issue.md
+            gh issue comment "$existing" --body-file "$body"
           else
             gh issue create \
               --title "Benchmark regression on main (${{ steps.base.outputs.head_short }})" \
-              --body-file issue.md \
+              --body-file "$body" \
               --label benchmark-regression \
               --assignee "$OWNER"
           fi
