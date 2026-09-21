@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789954455961,
+  "lastUpdate": 1789961618460,
   "repoUrl": "https://github.com/catdevman/mockagen",
   "entries": {
     "mockagen": [
@@ -1222,6 +1222,654 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkWriteRecords/fluent/10000 - allocs/op",
             "value": 10016,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "catdevman@gmail.com",
+            "name": "Lucas Pearson",
+            "username": "catdevman"
+          },
+          "committer": {
+            "email": "catdevman@gmail.com",
+            "name": "Lucas Pearson",
+            "username": "catdevman"
+          },
+          "distinct": true,
+          "id": "8d26dc620d9e405fff723b7f08542f8cb3aaf5e9",
+          "message": "fix: move back to faker",
+          "timestamp": "2026-09-20T23:16:30-04:00",
+          "tree_id": "898f79cb5a1de29c019f5e13ec4bb41bd36cbad8",
+          "url": "https://github.com/catdevman/mockagen/commit/8d26dc620d9e405fff723b7f08542f8cb3aaf5e9"
+        },
+        "date": 1789961617450,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkGenerateRecords",
+            "value": 7029059,
+            "unit": "ns/op\t2699474 B/op\t78176 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateRecords - ns/op",
+            "value": 7029059,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateRecords - B/op",
+            "value": 2699474,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateRecords - allocs/op",
+            "value": 78176,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/json",
+            "value": 15874393,
+            "unit": "ns/op\t2705028 B/op\t78192 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/json - ns/op",
+            "value": 15874393,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/json - B/op",
+            "value": 2705028,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/json - allocs/op",
+            "value": 78192,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/yaml",
+            "value": 16286821.5,
+            "unit": "ns/op\t2704944 B/op\t78196 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/yaml - ns/op",
+            "value": 16286821.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/yaml - B/op",
+            "value": 2704944,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/yaml - allocs/op",
+            "value": 78196,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fixed",
+            "value": 16930140,
+            "unit": "ns/op\t3793815 B/op\t82211 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fixed - ns/op",
+            "value": 16930140,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fixed - B/op",
+            "value": 3793815,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fixed - allocs/op",
+            "value": 82211,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/parquet",
+            "value": 13881659.5,
+            "unit": "ns/op\t3131986 B/op\t79530 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/parquet - ns/op",
+            "value": 13881659.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/parquet - B/op",
+            "value": 3131986,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/parquet - allocs/op",
+            "value": 79530,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fluent",
+            "value": 15928697,
+            "unit": "ns/op\t2705008 B/op\t78196 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fluent - ns/op",
+            "value": 15928697,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fluent - B/op",
+            "value": 2705008,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkPipeline/fluent - allocs/op",
+            "value": 78196,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10",
+            "value": 942076.5,
+            "unit": "ns/op\t4353 B/op\t6 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10 - ns/op",
+            "value": 942076.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10 - B/op",
+            "value": 4353,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10 - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10",
+            "value": 1025303,
+            "unit": "ns/op\t5400 B/op\t20 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10 - ns/op",
+            "value": 1025303,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10 - B/op",
+            "value": 5400,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10 - allocs/op",
+            "value": 20,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10",
+            "value": 780897.5,
+            "unit": "ns/op\t15321 B/op\t49 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10 - ns/op",
+            "value": 780897.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10 - B/op",
+            "value": 15321,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10 - allocs/op",
+            "value": 49,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10",
+            "value": 1655059,
+            "unit": "ns/op\t91050 B/op\t303 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10 - ns/op",
+            "value": 1655059,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10 - B/op",
+            "value": 91050,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10 - allocs/op",
+            "value": 303,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10",
+            "value": 946013,
+            "unit": "ns/op\t4514 B/op\t10 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10 - ns/op",
+            "value": 946013,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10 - B/op",
+            "value": 4514,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10 - allocs/op",
+            "value": 10,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/1000",
+            "value": 5755182.5,
+            "unit": "ns/op\t4354 B/op\t6 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/1000 - ns/op",
+            "value": 5755182.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/1000 - B/op",
+            "value": 4354,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/1000 - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/1000",
+            "value": 6924582,
+            "unit": "ns/op\t5400 B/op\t20 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/1000 - ns/op",
+            "value": 6924582,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/1000 - B/op",
+            "value": 5400,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/1000 - allocs/op",
+            "value": 20,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/1000",
+            "value": 11525096.5,
+            "unit": "ns/op\t1092448 B/op\t4009 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/1000 - ns/op",
+            "value": 11525096.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/1000 - B/op",
+            "value": 1092448,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/1000 - allocs/op",
+            "value": 4009,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/1000",
+            "value": 5629851.5,
+            "unit": "ns/op\t111798 B/op\t1292 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/1000 - ns/op",
+            "value": 5629851.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/1000 - B/op",
+            "value": 111798,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/1000 - allocs/op",
+            "value": 1292,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/1000",
+            "value": 5338235,
+            "unit": "ns/op\t4518 B/op\t10 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/1000 - ns/op",
+            "value": 5338235,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/1000 - B/op",
+            "value": 4518,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/1000 - allocs/op",
+            "value": 10,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10000",
+            "value": 45706467,
+            "unit": "ns/op\t4366 B/op\t6 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10000 - ns/op",
+            "value": 45706467,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10000 - B/op",
+            "value": 4366,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/json/10000 - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10000",
+            "value": 38745510,
+            "unit": "ns/op\t5400 B/op\t20 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10000 - ns/op",
+            "value": 38745510,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10000 - B/op",
+            "value": 5400,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/yaml/10000 - allocs/op",
+            "value": 20,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10000",
+            "value": 54738847.5,
+            "unit": "ns/op\t10884456 B/op\t40009 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10000 - ns/op",
+            "value": 54738847.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10000 - B/op",
+            "value": 10884456,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fixed/10000 - allocs/op",
+            "value": 40009,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10000",
+            "value": 24278509,
+            "unit": "ns/op\t320240 B/op\t10316 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10000 - ns/op",
+            "value": 24278509,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10000 - B/op",
+            "value": 320240,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/parquet/10000 - allocs/op",
+            "value": 10316,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10000",
+            "value": 45082992.5,
+            "unit": "ns/op\t4530 B/op\t10 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10000 - ns/op",
+            "value": 45082992.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10000 - B/op",
+            "value": 4530,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteRecords/fluent/10000 - allocs/op",
+            "value": 10,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1",
+            "value": 46707,
+            "unit": "ns/op\t73766 B/op\t131 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - ns/op",
+            "value": 46707,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - B/op",
+            "value": 73766,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1 - allocs/op",
+            "value": 131,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10",
+            "value": 104487.5,
+            "unit": "ns/op\t88733 B/op\t521 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - ns/op",
+            "value": 104487.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - B/op",
+            "value": 88733,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10 - allocs/op",
+            "value": 521,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100",
+            "value": 445106.5,
+            "unit": "ns/op\t233492 B/op\t4301 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - ns/op",
+            "value": 445106.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - B/op",
+            "value": 233492,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_100 - allocs/op",
+            "value": 4301,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000",
+            "value": 3772067.5,
+            "unit": "ns/op\t1681054 B/op\t42103 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - ns/op",
+            "value": 3772067.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - B/op",
+            "value": 1681054,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_1000 - allocs/op",
+            "value": 42103,
+            "unit": "allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000",
+            "value": 36449211.5,
+            "unit": "ns/op\t16156544 B/op\t420124 allocs/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - ns/op",
+            "value": 36449211.5,
+            "unit": "ns/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - B/op",
+            "value": 16156544,
+            "unit": "B/op",
+            "extra": "1 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateFakes/generate_fake_10000 - allocs/op",
+            "value": 420124,
             "unit": "allocs/op",
             "extra": "1 times\n4 procs"
           }
