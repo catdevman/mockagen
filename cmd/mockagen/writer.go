@@ -2,10 +2,17 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
+	// json/v2 rather than encoding/json: its MarshalWrite streams a value
+	// straight into an io.Writer, so a record costs no intermediate []byte
+	// at all. That matters here because the v1 API got measurably slower in
+	// Go 1.27 - v1 is now implemented on top of v2, which added ~17% to a
+	// batch write for this workload with identical allocation counts.
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,7 +44,7 @@ func newRecordWriter(config mockagen.MockagenConfig, structArr []reflect.StructF
 		if err != nil {
 			return nil, err
 		}
-		return newYAMLSeqWriter(f), nil
+		return newYAMLSeqWriter(f, structArr), nil
 	case "fixed":
 		f, err := os.Create(outputFile)
 		if err != nil {
@@ -82,12 +89,10 @@ type fluentWriter struct {
 	f   *os.File
 	w   *bufio.Writer
 	tag string
-	// buf assembles each line in one allocation-free pass so the timestamp
-	// and tag cost an append rather than a fmt call per record.
-	buf []byte
-	// stamp is the formatted timestamp every record in the current tick
-	// shares, and written counts records since it was last refreshed.
-	stamp   []byte
+	// prefix is the "<timestamp>\t<tag>\t" every record in the current tick
+	// shares, rebuilt only when the clock is resampled; written counts
+	// records since that last happened.
+	prefix  []byte
 	written int
 }
 
@@ -109,22 +114,20 @@ func newFluentWriter(f *os.File, tag string) *fluentWriter {
 // run would produce anyway, since a whole batch is generated inside the same
 // second and fluentd's time field only carries second resolution.
 func (w *fluentWriter) WriteRecord(rec any) error {
-	b, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
 	if w.written%fluentClockTick == 0 {
-		w.stamp = time.Now().AppendFormat(w.stamp[:0], time.RFC3339)
+		w.prefix = time.Now().AppendFormat(w.prefix[:0], time.RFC3339)
+		w.prefix = append(w.prefix, '\t')
+		w.prefix = append(w.prefix, w.tag...)
+		w.prefix = append(w.prefix, '\t')
 	}
 	w.written++
-	w.buf = append(w.buf[:0], w.stamp...)
-	w.buf = append(w.buf, '\t')
-	w.buf = append(w.buf, w.tag...)
-	w.buf = append(w.buf, '\t')
-	w.buf = append(w.buf, b...)
-	w.buf = append(w.buf, '\n')
-	_, err = w.w.Write(w.buf)
-	return err
+	if _, err := w.w.Write(w.prefix); err != nil {
+		return err
+	}
+	if err := json.MarshalWrite(w.w, rec); err != nil {
+		return err
+	}
+	return w.w.WriteByte('\n')
 }
 
 func (w *fluentWriter) Close() error {
@@ -153,12 +156,7 @@ func (w *jsonArrayWriter) WriteRecord(rec any) error {
 		}
 	}
 	w.first = false
-	b, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
-	_, err = w.w.Write(b)
-	return err
+	return json.MarshalWrite(w.w, rec)
 }
 
 func (w *jsonArrayWriter) Close() error {
@@ -174,31 +172,85 @@ func (w *jsonArrayWriter) Close() error {
 type yamlSeqWriter struct {
 	f *os.File
 	w *bufio.Writer
+	// keys holds the pre-rendered "<key>:" for each struct field, in field
+	// order. It is nil when the record type is not a flat struct of strings,
+	// which sends WriteRecord down the general yaml.Marshal path instead.
+	keys [][]byte
+	buf  []byte
 }
 
-func newYAMLSeqWriter(f *os.File) *yamlSeqWriter {
-	return &yamlSeqWriter{f: f, w: bufio.NewWriter(f)}
+// newYAMLSeqWriter pre-renders the mapping keys from structArr, which never
+// change across records. The whole point is to avoid yaml.Marshal per record:
+// it builds a node tree and formats it from scratch every time, which made
+// this writer cost more than *generating* the data it was writing (see
+// docs/benchmarking.md).
+func newYAMLSeqWriter(f *os.File, structArr []reflect.StructField) *yamlSeqWriter {
+	w := &yamlSeqWriter{f: f, w: bufio.NewWriter(f)}
+	keys := make([][]byte, 0, len(structArr))
+	for _, field := range structArr {
+		if field.Type.Kind() != reflect.String {
+			// A non-string column would need real type-aware emission;
+			// hand the whole job back to yaml.Marshal rather than guess.
+			return w
+		}
+		name := field.Tag.Get("yaml")
+		if name == "" {
+			return w
+		}
+		key := appendYAMLScalar(nil, name)
+		keys = append(keys, append(key, ':'))
+	}
+	w.keys = keys
+	return w
 }
 
-// WriteRecord marshals rec on its own, then reframes it as one YAML
-// sequence item: the first line gets a "- " marker and every following
-// line is shifted two spaces to stay aligned under it. Uniformly shifting
-// every line preserves any indentation already inside the record's YAML.
+// WriteRecord emits rec as one item of a YAML sequence: the first line
+// carries the "- " marker and the rest are indented two spaces to stay
+// aligned under it.
 func (w *yamlSeqWriter) WriteRecord(rec any) error {
+	if w.keys == nil {
+		return w.writeMarshaled(rec)
+	}
+	v := reflect.ValueOf(rec)
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct || v.NumField() != len(w.keys) {
+		return w.writeMarshaled(rec)
+	}
+	w.buf = w.buf[:0]
+	for i, key := range w.keys {
+		if i == 0 {
+			w.buf = append(w.buf, '-', ' ')
+		} else {
+			w.buf = append(w.buf, ' ', ' ')
+		}
+		w.buf = append(w.buf, key...)
+		w.buf = append(w.buf, ' ')
+		w.buf = appendYAMLScalar(w.buf, v.Field(i).String())
+		w.buf = append(w.buf, '\n')
+	}
+	_, err := w.w.Write(w.buf)
+	return err
+}
+
+// writeMarshaled is the general path for record types the fast path cannot
+// describe: marshal the record on its own, then shift every line right by
+// two spaces so it sits under the "- " marker. Shifting uniformly preserves
+// any indentation already inside the record's YAML.
+func (w *yamlSeqWriter) writeMarshaled(rec any) error {
 	b, err := yaml.Marshal(rec)
 	if err != nil {
 		return err
 	}
 	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 	for i, line := range lines {
+		prefix := "  "
 		if i == 0 {
-			if _, err := w.w.WriteString("- "); err != nil {
-				return err
-			}
-		} else {
-			if _, err := w.w.WriteString("  "); err != nil {
-				return err
-			}
+			prefix = "- "
+		}
+		if _, err := w.w.WriteString(prefix); err != nil {
+			return err
 		}
 		if _, err := w.w.WriteString(line); err != nil {
 			return err
@@ -208,6 +260,73 @@ func (w *yamlSeqWriter) WriteRecord(rec any) error {
 		}
 	}
 	return nil
+}
+
+// yamlReservedWords are the words a plain scalar must not be: YAML resolves
+// each of them to a boolean or null rather than to the string it looks like.
+// The list covers YAML 1.1's spellings, which yaml.v3 still recognises on
+// read, not just YAML 1.2's true/false/null.
+var yamlReservedWords = [...]string{
+	"y", "n", "yes", "no", "on", "off", "true", "false", "null", "~",
+}
+
+// yamlReserved reports whether s is one of those words, ignoring case. A
+// linear scan of ten short strings beats a map keyed on strings.ToLower(s),
+// which allocated a lowercased copy for every capitalised value that got
+// this far - 4 allocations per record on the benchmark schema.
+func yamlReserved(s string) bool {
+	if len(s) > 5 {
+		return false
+	}
+	for _, word := range yamlReservedWords {
+		if strings.EqualFold(s, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// appendYAMLScalar appends s to dst as a YAML scalar that reads back as
+// exactly s.
+//
+// The plain (unquoted) test is deliberately narrow rather than a full
+// implementation of YAML's plain-scalar grammar: requiring a leading ASCII
+// letter and a body drawn from a small alphabet rules out every indicator
+// character, every numeric form, and any occurrence of ": " or " #" in one
+// pass, leaving only the reserved words to check. Anything else is
+// double-quoted, which is always safe.
+func appendYAMLScalar(dst []byte, s string) []byte {
+	if yamlPlainSafe(s) {
+		return append(dst, s...)
+	}
+	// A JSON string literal is also a valid YAML 1.2 double-quoted scalar -
+	// YAML 1.2 is a JSON superset - so this borrows jsontext's escaping
+	// rather than reimplementing it.
+	quoted, err := jsontext.AppendQuote(dst, s)
+	if err != nil {
+		// Only invalid UTF-8 can land here; fall back to the escaping
+		// jsontext would apply after replacing the bad bytes.
+		return strconv.AppendQuote(dst, strings.ToValidUTF8(s, "\uFFFD"))
+	}
+	return quoted
+}
+
+func yamlPlainSafe(s string) bool {
+	if s == "" {
+		return false
+	}
+	if c := s[0]; !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_', c == '-', c == '.', c == '@', c == '/', c == '+':
+		default:
+			return false
+		}
+	}
+	return !yamlReserved(s)
 }
 
 func (w *yamlSeqWriter) Close() error {

@@ -9,7 +9,7 @@ not currently have all the same functionality.
 
 ### Using go install (recommended)
 
-Requires Go 1.26 or later. This fetches, compiles, and installs the binary
+Requires Go 1.27 or later. This fetches, compiles, and installs the binary
 into `$GOBIN` (default `$GOPATH/bin`, usually `~/go/bin`):
 
 ```

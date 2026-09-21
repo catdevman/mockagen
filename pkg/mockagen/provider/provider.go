@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/catdevman/faker"
+	"github.com/go-faker/faker/v4"
 )
 
 // TypeMap maps Mockaroo schema type names to the faker tags this package
@@ -34,6 +34,17 @@ var TypeMap = map[string]string{
 	"Semantic Version": "mockagen_semver",
 	"Boolean":          "mockagen_boolean",
 	"Blank":            "mockagen_blank",
+	// These three override go-faker tags that do exist, rather than filling
+	// a gap. Its sentence generator calls rand.Perm over the *entire*
+	// 250-word list to choose 6 words, so every sentence costs 250 calls to
+	// faker's mutex-guarded global RNG and a 250-int allocation, then runs
+	// the first word through golang.org/x/text's title caser. A CPU profile
+	// of generation put 39% of all samples in that one path. The versions
+	// below index into the word list directly, through math/rand/v2's per-P
+	// state, which takes no lock at all.
+	"Word":      "mockagen_word",
+	"Sentence":  "mockagen_sentence",
+	"Paragraph": "mockagen_paragraph",
 }
 
 func init() {
@@ -52,10 +63,19 @@ func init() {
 	register("mockagen_semver", semanticVersion)
 	register("mockagen_boolean", boolean)
 	register("mockagen_blank", blank)
+	register("mockagen_word", word)
+	register("mockagen_sentence", sentence)
+	register("mockagen_paragraph", paragraph)
 }
+
+// registered records every tag init() wired up, so a test can verify that
+// TypeMap does not point at a tag nothing registers - a typo there would
+// silently fall through to faker generating a plain random string.
+var registered = map[string]bool{}
 
 // register wires a zero-argument string generator up to a faker tag.
 func register(tag string, gen func() string) {
+	registered[tag] = true
 	if err := faker.AddProvider(tag, func(_ reflect.Value) (any, error) {
 		return gen(), nil
 	}); err != nil {
@@ -215,4 +235,77 @@ func boolean() string {
 
 func blank() string {
 	return ""
+}
+
+// loremWords is the vocabulary the text generators draw from. Latin, to match
+// what Mockaroo's Word/Sentence/Paragraph types produce.
+var loremWords = []string{
+	"a", "ab", "accusamus", "ad", "alias", "aliquam", "aliquid", "amet",
+	"animi", "aperiam", "architecto", "asperiores", "aspernatur", "assumenda",
+	"at", "atque", "aut", "autem", "beatae", "blanditiis", "commodi",
+	"consectetur", "consequatur", "corporis", "corrupti", "culpa", "cum",
+	"cupiditate", "debitis", "delectus", "deleniti", "deserunt", "dicta",
+	"differt", "dignissimos", "distinctio", "dolor", "dolore", "dolorem",
+	"doloremque", "dolores", "doloribus", "dolorum", "ducimus", "ea", "eaque",
+	"earum", "eius", "eligendi", "enim", "eos", "error", "esse", "est", "et",
+	"eum", "eveniet", "ex", "excepturi", "exercitationem", "expedita",
+	"explicabo", "facere", "facilis", "fuga", "fugiat", "fugit", "harum",
+	"hic", "id", "illo", "illum", "impedit", "in", "incidunt", "inventore",
+	"ipsa", "ipsam", "ipsum", "iste", "itaque", "iure", "iusto", "labore",
+	"laboriosam", "laborum", "laudantium", "libero", "magnam", "magni",
+	"maiores", "maxime", "minima", "minus", "modi", "molestiae", "molestias",
+	"mollitia", "nam", "natus", "necessitatibus", "nemo", "neque", "nesciunt",
+	"nihil", "nisi", "nobis", "non", "nostrum", "nulla", "numquam", "occaecati",
+	"odio", "odit", "officia", "officiis", "omnis", "optio", "pariatur",
+	"perferendis", "perspiciatis", "placeat", "porro", "possimus", "praesentium",
+	"provident", "quae", "quaerat", "quam", "quas", "quasi", "qui", "quia",
+	"quibusdam", "quidem", "quis", "quo", "quod", "ratione", "recusandae",
+	"reiciendis", "rem", "repellat", "repellendus", "reprehenderit",
+	"repudiandae", "rerum", "saepe", "sapiente", "sed", "sequi", "similique",
+	"sint", "sit", "soluta", "sunt", "suscipit", "tempora", "tempore",
+	"temporibus", "tenetur", "totam", "ut", "vel", "velit", "veniam", "veritatis",
+	"vero", "vitae", "voluptas", "voluptate", "voluptatem", "voluptates",
+	"voluptatibus", "voluptatum",
+}
+
+func word() string {
+	return pick(loremWords)
+}
+
+// sentenceInto appends one capitalised, full-stopped sentence to b. Callers
+// that need several share one builder rather than joining strings.
+func sentenceInto(b *strings.Builder) {
+	words := 4 + rand.IntN(9)
+	for i := range words {
+		w := pick(loremWords)
+		if i == 0 {
+			// Every word in the list is lowercase ASCII, so upper-casing
+			// the first byte is enough - no need for a Unicode title caser.
+			b.WriteByte(w[0] - ('a' - 'A'))
+			b.WriteString(w[1:])
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(w)
+	}
+	b.WriteByte('.')
+}
+
+func sentence() string {
+	var b strings.Builder
+	b.Grow(96)
+	sentenceInto(&b)
+	return b.String()
+}
+
+func paragraph() string {
+	var b strings.Builder
+	b.Grow(384)
+	for i := range 3 + rand.IntN(3) {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		sentenceInto(&b)
+	}
+	return b.String()
 }
