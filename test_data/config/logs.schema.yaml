@@ -1,0 +1,21 @@
+num_rows: 5
+file_format: fluent
+name: logs
+tag: mockagen.app.access
+columns:
+  - name: request_id
+    type: GUID
+  - name: user
+    type: Username
+  - name: client_ip
+    type: IP Address
+  - name: level
+    type: Custom List
+    values:
+      - DEBUG
+      - INFO
+      - WARN
+      - ERROR
+    selectionStyle: random
+  - name: message
+    type: Sentence

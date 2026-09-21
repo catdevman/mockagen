@@ -2,11 +2,15 @@ package mockagen
 
 // MockagenConfig -
 type MockagenConfig struct {
-	NumberOfRecords int              `yaml:"num_rows" json:"num_rows" toml:"num_rows"`
-	FileFormat      string           `yaml:"file_format" json:"file_format" toml:"file_format"`
-	Name            string           `yaml:"name" json:"name" toml:"name"`
-	IncludeHeader   bool             `yaml:"include_header" json:"include_header" toml:"include_header"`
-	Columns         []MockagenColumn `yaml:"columns" json:"columns" toml:"columns"`
+	NumberOfRecords int    `yaml:"num_rows" json:"num_rows" toml:"num_rows"`
+	FileFormat      string `yaml:"file_format" json:"file_format" toml:"file_format"`
+	Name            string `yaml:"name" json:"name" toml:"name"`
+	IncludeHeader   bool   `yaml:"include_header" json:"include_header" toml:"include_header"`
+	// Tag is the fluentd tag written on every line by the "fluent" file
+	// format, and is ignored by every other format. Defaults to the config
+	// name when empty.
+	Tag     string           `yaml:"tag" json:"tag" toml:"tag"`
+	Columns []MockagenColumn `yaml:"columns" json:"columns" toml:"columns"`
 }
 
 // MockagenColumn -

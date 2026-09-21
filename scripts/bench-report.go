@@ -34,15 +34,27 @@ import (
 type threshold struct {
 	pct               float64
 	needsSignificance bool
+	// higherIsBetter inverts which direction counts as a regression. Every
+	// cost metric gets worse as it grows; throughput gets worse as it
+	// shrinks, and would otherwise be reported as a regression exactly when
+	// it improved.
+	higherIsBetter bool
 }
 
 var thresholds = map[string]threshold{
-	"sec/op":    {10.0, true},
-	"B/op":      {1.0, false},
-	"allocs/op": {1.0, false},
+	"sec/op":    {pct: 10.0, needsSignificance: true},
+	"B/op":      {pct: 1.0},
+	"allocs/op": {pct: 1.0},
+	// Throughput (b.SetBytes) is wall-clock derived, so it is as noisy as
+	// sec/op and gets the same margin and significance gate.
+	"B/s": {pct: 10.0, needsSignificance: true, higherIsBetter: true},
+	// Bytes of output per record is deterministic for a given schema: a
+	// shift means a writer changed what it emits, not that the machine was
+	// busy. Same tight, ungated threshold as the allocation counters.
+	"B/rec": {pct: 1.0},
 }
 
-var defaultThreshold = threshold{10.0, true}
+var defaultThreshold = threshold{pct: 10.0, needsSignificance: true}
 
 // benchstat column label for the baseline; the workflow passes `base=...`.
 const baseFileLabel = "base"
@@ -85,16 +97,20 @@ func humanize(unit string, v *float64) string {
 			}
 		}
 		return fmt.Sprintf("%.2f s", value)
-	case "B/op":
+	case "B/op", "B/rec", "B/s":
+		unitSuffix := ""
+		if unit == "B/s" {
+			unitSuffix = "/s"
+		}
 		for _, s := range []struct {
 			scale  float64
 			suffix string
 		}{{1, "B"}, {1 << 10, "KiB"}, {1 << 20, "MiB"}} {
 			if value < s.scale*1024 {
-				return fmt.Sprintf("%.1f %s", value/s.scale, s.suffix)
+				return fmt.Sprintf("%.1f %s%s", value/s.scale, s.suffix, unitSuffix)
 			}
 		}
-		return fmt.Sprintf("%.1f GiB", value/(1<<30))
+		return fmt.Sprintf("%.1f GiB%s", value/(1<<30), unitSuffix)
 	}
 	return commas(value)
 }
@@ -397,7 +413,11 @@ func main() {
 			flag := ""
 			if r.name != "geomean" && math.Abs(delta) > th.pct && (significant || !th.needsSignificance) {
 				f := finding{sec.unit, r.name, *r.old, *r.new, delta, r.p}
-				if delta > 0 {
+				worse := delta > 0
+				if th.higherIsBetter {
+					worse = delta < 0
+				}
+				if worse {
 					flag = "🔴"
 					regressions = append(regressions, f)
 				} else {
@@ -415,8 +435,9 @@ func main() {
 	add("### Verdict")
 	add("")
 	if len(regressions) > 0 {
-		add("**%d regression(s)** past threshold (sec/op >%.0f%% and significant, "+
-			"allocs/op and B/op >%.0f%%):", len(regressions),
+		add("**%d regression(s)** past threshold (wall-clock metrics - sec/op, B/s - "+
+			">%.0f%% and significant; deterministic counters - B/op, allocs/op, B/rec - "+
+			">%.0f%%):", len(regressions),
 			thresholds["sec/op"].pct, thresholds["allocs/op"].pct)
 		add("")
 		for _, f := range regressions {
@@ -446,8 +467,9 @@ func main() {
 	}
 	add("")
 	add("<sub>`~` means benchstat could not distinguish the difference from noise. " +
-		"Wall-clock numbers are only comparable within this run; allocation counts " +
-		"are deterministic and comparable everywhere.</sub>")
+		"Wall-clock numbers (sec/op, B/s) are only comparable within this run; " +
+		"allocation counts and bytes-per-record are deterministic and comparable " +
+		"everywhere.</sub>")
 
 	if *emitGoBench != "" {
 		// Synthesise a canonical `go test -bench` output from the head medians so

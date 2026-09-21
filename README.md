@@ -57,6 +57,35 @@ The `-config` flag accepts any of the following formats:
 | `.yaml` | YAML |
 | `.toml` | TOML |
 
+## Output formats
+
+The `file_format` field in a config selects how records are written to
+`./output/<name>.<ext>`:
+
+| `file_format` | Extension | Output |
+|---|---|---|
+| `json` | `.json` | One JSON array of record objects |
+| `yaml` | `.yaml` | A YAML sequence, one item per record |
+| `fixed` | `.fixed` | Fixed-width lines (uses each column's `start_position`/`end_position`) |
+| `parquet` | `.parquet` | Snappy-compressed Parquet |
+| `fluent` | `.log` | Log lines in fluentd's `out_file` shape |
+
+### Log output (`fluent`)
+
+Each record becomes a single line holding a timestamp, a tag, and the record
+as a JSON object, separated by tabs - the format fluentd's `out_file` plugin
+writes and its `out_file` parser reads back:
+
+```
+2026-09-20T20:38:09-04:00	mockagen.app.access	{"user":"rqCgpGK","level":"WARN"}
+```
+
+The timestamp is taken when the line is written, so records from the same run
+commonly share one. Set the tag with a top-level `tag` field; it defaults to
+`mockagen.<name>` when omitted. See
+[test_data/config/logs.schema.yaml](test_data/config/logs.schema.yaml) for a
+full example.
+
 ## Benchmarks
 
 Performance over time is tracked at

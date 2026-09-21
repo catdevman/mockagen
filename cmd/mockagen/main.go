@@ -69,7 +69,7 @@ func main() {
 	flag.Parse()
 	// Check if config is legit
 	config := mockagen.LoadConfig(configFile)
-	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), config.FileFormat)
+	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), outputExt(config.FileFormat))
 
 	fakesCh, structArr := generateFakes(config)
 	w, err := newRecordWriter(config, structArr, outputFile)
@@ -84,6 +84,16 @@ func main() {
 	if err := w.Close(); err != nil {
 		panic(err)
 	}
+}
+
+// outputExt returns the extension the output file gets for a file_format.
+// Most format names double as a sensible extension; "fluent" names a line
+// format rather than a file type, so its output lands in a .log file.
+func outputExt(format string) string {
+	if format == "fluent" {
+		return "log"
+	}
+	return format
 }
 
 // structFieldName turns an arbitrary column name into a valid, unique
