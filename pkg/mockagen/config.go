@@ -9,7 +9,21 @@ type MockagenConfig struct {
 	// Tag is the fluentd tag written on every line by the "fluent" file
 	// format, and is ignored by every other format. Defaults to the config
 	// name when empty.
-	Tag     string           `yaml:"tag" json:"tag" toml:"tag"`
+	Tag string `yaml:"tag" json:"tag" toml:"tag"`
+	// Dialect selects which database's spelling the "sql" file format
+	// writes - postgres, mysql, sqlite or mssql - and is ignored by every
+	// other format. Defaults to postgres when empty.
+	Dialect string `yaml:"dialect" json:"dialect" toml:"dialect"`
+	// Mode selects what the "sql" file format writes: "insert" (the default)
+	// for INSERT statements, or "bulk" for a CSV data file plus a script
+	// that bulk-loads it with the dialect's native loader. Ignored by every
+	// other format. Deliberately not named sql_mode, which is a real MySQL
+	// server variable.
+	Mode string `yaml:"mode" json:"mode" toml:"mode"`
+	// Table is the table the "sql" file format inserts into, optionally
+	// schema-qualified ("dbo.users"). Defaults to the config name with its
+	// spaces turned into underscores.
+	Table   string           `yaml:"table" json:"table" toml:"table"`
 	Columns []MockagenColumn `yaml:"columns" json:"columns" toml:"columns"`
 }
 

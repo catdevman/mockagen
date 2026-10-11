@@ -1,0 +1,14 @@
+num_rows: 2000
+file_format: sql
+mode: bulk
+dialect: postgres
+include_header: true
+name: users bulk
+table: public.users
+columns:
+  - name: id
+    type: GUID
+  - name: email
+    type: Email Address
+  - name: signed_up
+    type: Datetime

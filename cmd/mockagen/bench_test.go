@@ -33,7 +33,7 @@ const benchRecords = 1000
 var benchSizes = []int{10, 1000, 10000}
 
 // benchFormats is every file_format newRecordWriter supports.
-var benchFormats = []string{"json", "yaml", "fixed", "parquet", "fluent"}
+var benchFormats = []string{"json", "yaml", "csv", "fixed", "parquet", "fluent", "sql"}
 
 // benchFieldWidth is the column width handed to the fixed-width encoder.
 // Wide enough that the generated values are not systematically truncated,

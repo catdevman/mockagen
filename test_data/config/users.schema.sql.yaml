@@ -1,0 +1,16 @@
+num_rows: 10
+file_format: sql
+dialect: postgres
+name: users
+table: public.users
+columns:
+  - name: id
+    type: GUID
+  - name: first_name
+    type: First Name
+  - name: last_name
+    type: Last Name
+  - name: email
+    type: Email Address
+  - name: signed_up
+    type: Datetime

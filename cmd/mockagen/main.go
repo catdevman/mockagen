@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"maps"
+	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -74,16 +75,25 @@ func main() {
 	fakesCh, structArr := generateFakes(config)
 	w, err := newRecordWriter(config, structArr, outputFile)
 	if err != nil {
-		panic(err)
+		fatal(err)
 	}
 	for fake := range fakesCh {
 		if err := w.WriteRecord(fake); err != nil {
-			panic(err)
+			fatal(err)
 		}
 	}
 	if err := w.Close(); err != nil {
-		panic(err)
+		fatal(err)
 	}
+}
+
+// fatal reports a failure the user can act on - an unusable config value, an
+// output file that cannot be written - and exits non-zero. These are not
+// programmer errors, so they get a message rather than a panic and the stack
+// trace that comes with it.
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, "mockagen:", err)
+	os.Exit(1)
 }
 
 // outputExt returns the extension the output file gets for a file_format.
@@ -126,7 +136,7 @@ func generateFakes(config mockagen.MockagenConfig) (<-chan any, []reflect.Struct
 			fakerStr += strings.Join(col.Values, ",")
 		}
 		lower := strings.ToLower(col.Name)
-		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\" parquet:\"%s\"", fakerStr, lower, lower, lower, lower)
+		tagStr := fmt.Sprintf("faker:\"%s\" json:\"%s\" yaml:\"%s\" csv:\"%s\" parquet:\"%s\" sql:\"%s\"", fakerStr, lower, lower, lower, lower, lower)
 		if config.FileFormat == "fixed" {
 			tagStr += fmt.Sprintf(" fixed:\"%d,%d\"", col.StartPosition, col.EndPosition)
 		}

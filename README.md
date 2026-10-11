@@ -66,9 +66,47 @@ The `file_format` field in a config selects how records are written to
 |---|---|---|
 | `json` | `.json` | One JSON array of record objects |
 | `yaml` | `.yaml` | A YAML sequence, one item per record |
-| `fixed` | `.fixed` | Fixed-width lines (uses each column's `start_position`/`end_position`) |
+| `csv` | `.csv` | RFC 4180 rows, with an optional header |
+| `fixed` | `.fixed` | Fixed-width lines (requires each column's `start_position`/`end_position`) |
 | `parquet` | `.parquet` | Snappy-compressed Parquet |
 | `fluent` | `.log` | Log lines in fluentd's `out_file` shape |
+| `sql` | `.sql` | Multi-row `INSERT INTO` statements, or a bulk-load bundle |
+
+### Fixed-width output (`fixed`)
+
+Every column needs a `start_position` and an `end_position`, which are 1-based
+and inclusive - a column at `1`-`10` occupies the line's first ten bytes. A
+config that leaves them out, starts a column at `0`, or puts a start past its
+end is rejected by name before anything is written, rather than panicking
+inside the encoder or quietly dropping the column.
+
+### CSV output (`csv`)
+
+RFC 4180 rows, one per record. Set `include_header: true` for a leading
+header row of column names:
+
+```
+id,full name,email
+0dcfa976-4eff-4a24-b5de-f2e15f53a9ae,Ms. Lucy Hartmann,YQVcGFs@gUCfVCO.info
+```
+
+Headers use the same lowercased column names as the `json`, `yaml` and
+`parquet` keys, so one config describes the same columns whichever format it
+is written to.
+
+Fields are quoted only where the format requires it - a comma, quote, CR or
+LF anywhere in the value, or a leading space - which is exactly
+`encoding/csv`'s rule; the output is byte-identical to what the standard
+library's writer would produce. One asymmetry worth knowing: a value holding
+a CRLF reads back with a bare LF, because `encoding/csv`'s *reader* collapses
+it inside a quoted field. No encoding avoids that, and the generator does not
+produce such values today.
+
+This is the fastest of the output formats, and the smallest per record - it is
+the one to reach for when loading a database in bulk, via `COPY FROM`
+(postgres), `LOAD DATA INFILE` (mysql), `BULK INSERT` (mssql) or `.import`
+(sqlite), all of which are far faster than the `INSERT` statements the `sql`
+format writes.
 
 ### Log output (`fluent`)
 
@@ -85,6 +123,95 @@ commonly share one. Set the tag with a top-level `tag` field; it defaults to
 `mockagen.<name>` when omitted. See
 [test_data/config/logs.schema.yaml](test_data/config/logs.schema.yaml) for a
 full example.
+
+### SQL output (`sql`)
+
+Records are written as multi-row `INSERT` statements, batched 1000 rows per
+statement:
+
+```sql
+INSERT INTO "public"."users" ("id", "first_name", "email") VALUES
+	('5dcc7536-3c67-483c-be5e-c3dc4e2d12e4', 'Macey', 'ujYtaeA@mLNUxoU.net'),
+	('1dd2fece-a28b-4315-ad0e-0edf4bfc2f80', 'Audreanne', 'qlDTJjV@WIgWEmj.org');
+```
+
+Three top-level fields configure it:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `dialect` | `postgres` | Which database's spelling to write |
+| `mode` | `insert` | `insert` for statements, `bulk` for a load bundle (below) |
+| `table` | the config `name`, spaces to underscores | Table to insert into, optionally schema-qualified (`dbo.users`) |
+
+`dialect` accepts `postgres`, `mysql`, `sqlite` and `mssql`, plus the usual
+aliases (`postgresql`, `pg`, `mariadb`, `sqlite3`, `sqlserver`, `tsql`). An
+unrecognised one is an error rather than a fallback. The dialects differ in
+three places:
+
+- **Identifier quoting** - `"col"` for postgres and sqlite, `` `col` `` for
+  mysql, `[col]` for mssql. Every identifier is quoted, so a column named
+  `order` needs no special handling.
+- **Backslashes** - mysql reads backslash as an escape character by default,
+  so each one is doubled; the other three take it literally.
+- **Unicode literals** - mssql gets an `N'...'` prefix on any value holding
+  non-ASCII text, without which the literal is `varchar` and anything outside
+  the server's code page is replaced with `?` on insert.
+
+Single quotes are escaped by doubling in all four. NUL bytes are dropped,
+since no dialect's literal syntax can carry one portably.
+
+The output is `INSERT` statements only - no `CREATE TABLE`, no transaction
+wrapper - so it composes with whatever schema and load script you already
+have. Nothing is ever written as `NULL`: the generator has no null support,
+so a blank column arrives as an empty string and is inserted as one. See
+[test_data/config/users.schema.sql.yaml](test_data/config/users.schema.sql.yaml)
+for a full example.
+
+#### Bulk loading (`mode: bulk`)
+
+`INSERT` statements are the portable way in, not the fast one. With
+`mode: bulk` the same config writes a **pair** of files instead:
+
+```
+output/users-bulk.csv        the data
+output/users-bulk.load.sql   the command that loads it
+```
+
+The CSV is exactly what `file_format: csv` produces; what this adds is the
+loader, which is the part that differs per database and is easy to get subtly
+wrong:
+
+| dialect | command | reads the file |
+|---|---|---|
+| `postgres` | `\copy` | client-side, relative to psql's directory |
+| `mysql` | `LOAD DATA LOCAL INFILE` | client-side, needs `local_infile=1` |
+| `sqlite` | `.mode csv` + `.import` | client-side (CLI dot-commands, not SQL) |
+| `mssql` | `BULK INSERT` | **server-side** - see below |
+
+The loader names the CSV by bare file name, so the two files are a movable
+pair: zip them together, unpack them on the database host, and run the script
+from that directory. Each generated script opens with the exact invocation and
+the caveats that apply to it.
+
+Two things to know:
+
+- **`mssql` is the exception.** `BULK INSERT` is executed by the SQL Server
+  process, so the path resolves on the server and relative to *its* working
+  directory. After unpacking on the server you have to substitute an absolute
+  path, or use the `bcp` command the script also prints, which does honour a
+  relative name. `BULK INSERT` also takes no column list and maps fields by
+  position, so the table's column order must match the CSV's - the script
+  prints that order.
+- **Empty fields load as empty strings, not `NULL`.** Every dialect can
+  coerce them (`NULL ''`, `NULLIF`), but only for all columns at once, which
+  would rewrite legitimately empty text. Each script carries the one-line
+  change as a comment rather than applying it.
+
+`mode: bulk` with `dialect: sqlite` rejects a schema-qualified `table`:
+sqlite's `.import` takes a bare table argument and would otherwise create a
+table whose name contains the dot, having exited successfully. See
+[test_data/config/users.schema.bulk.yaml](test_data/config/users.schema.bulk.yaml)
+for a full example.
 
 ## Benchmarks
 
