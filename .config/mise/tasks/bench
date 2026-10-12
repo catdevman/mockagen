@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Run the benchmarks once against the working tree"
+set -euo pipefail
+go test ./cmd/mockagen -run='^$' -bench=. -benchmem -count=1

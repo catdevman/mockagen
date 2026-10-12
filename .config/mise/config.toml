@@ -1,0 +1,11 @@
+# Toolchain for this repo. The developer tasks live as scripts in
+# .config/mise/tasks/; `mise tasks` lists them with descriptions and
+# `mise run <name>` runs one.
+#
+# CI does not use any of this - the workflows call go directly and take their
+# toolchain from go.mod - so tasks can change without touching them.
+
+[tools]
+# Matches the go directive in go.mod, so a checkout provisions the right
+# toolchain with `mise install`.
+go = "1.27"

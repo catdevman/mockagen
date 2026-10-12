@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Start the postgres, mysql and SQL Server containers and wait for them"
+set -euo pipefail
+docker compose -f test/docker-compose.yml up -d --wait

@@ -1,0 +1,49 @@
+# Database servers for the integration tests, which verify the generated SQL
+# against the real thing rather than against golden output.
+#
+#   make db-up            start and wait for all three
+#   make test-integration run the tests against them
+#   make db-down          stop and remove, volumes included
+#
+# No ports are published: the tests reach the servers with `docker compose
+# exec` and drive each one's own CLI client, because that is what the
+# generated bulk scripts are written for - psql's \copy and mysql's LOAD DATA
+# LOCAL INFILE are client features a Go SQL driver would never exercise.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: mockagen
+      POSTGRES_DB: mockagen
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mockagen"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    # local_infile is off by default on the server side, and LOAD DATA LOCAL
+    # INFILE needs it on both ends - the same flag the generated script tells
+    # the user to pass to the client.
+    command: --local-infile=1
+    environment:
+      MYSQL_ROOT_PASSWORD: mockagen
+      MYSQL_DATABASE: mockagen
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pmockagen --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Mockagen1!"
+      MSSQL_PID: Developer
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Mockagen1!' -C -Q 'SELECT 1' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 40

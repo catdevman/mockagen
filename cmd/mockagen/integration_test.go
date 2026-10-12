@@ -1,0 +1,532 @@
+//go:build integration
+
+// Integration tests that run generated SQL through real database servers.
+//
+// The golden-output tests in writer_test.go pin what each dialect's bytes
+// look like; these check that the bytes actually load, and that every value
+// comes back as exactly what went in. That matters most for the three places
+// the dialects genuinely differ - mysql's backslash escaping, mssql's N”
+// prefix, and each one's bulk loader - because getting those wrong produces
+// corrupted data rather than an error.
+//
+// Servers come from test/docker-compose.yml:
+//
+//	make db-up && make test-integration && make db-down
+//
+// Without them the tests skip rather than fail. Each one talks to its server
+// through that server's own CLI client via `docker compose exec`, not through
+// a Go SQL driver, because the bulk scripts are written for those clients:
+// psql's \copy and mysql's LOAD DATA LOCAL INFILE are client features a
+// driver would never exercise.
+package main
+
+import (
+	"encoding/hex"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"unicode/utf16"
+
+	"github.com/catdevman/mockagen/pkg/mockagen"
+)
+
+const composeFile = "../../test/docker-compose.yml"
+
+// containerBundleDir is where a generated bundle is copied inside the
+// container. The bulk scripts reference their CSV by bare name, so the client
+// is run with this as its working directory - the same thing a user does
+// after unpacking the pair on the database host.
+const containerBundleDir = "/tmp/mockagen-bundle"
+
+// integrationValues is the value set these tests round-trip. It is csvTricky
+// minus two cases that belong to the databases rather than to mockagen:
+//
+//   - values holding a NUL, which the sql writer drops by design (no
+//     dialect's literal syntax can carry one) and postgres rejects outright;
+//   - invalid UTF-8, which a UTF8 database correctly refuses.
+//
+// Neither is reachable from a generator type. What is left is every case that
+// decides whether escaping is right: backslashes, quotes, embedded newlines,
+// a leading space, non-BMP characters, and a value long enough to rule out
+// truncation.
+func integrationValues() []string {
+	var out []string
+	for _, v := range csvTricky {
+		if strings.ContainsRune(v, 0) || !utf8Valid(v) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func utf8Valid(s string) bool {
+	for _, r := range s {
+		if r == '�' {
+			return false
+		}
+	}
+	return true
+}
+
+// target describes one database server and how to drive it.
+type target struct {
+	dialect string // mockagen dialect name
+	service string // docker compose service
+
+	// client is the argv prefix that runs the server's CLI client against
+	// the mockagen database.
+	client []string
+	// initSQL runs before anything else, to create the database where the
+	// image does not make one.
+	initSQL []string
+	// ddl creates the two-column table the tests load into. Column order
+	// matters: mssql's BULK INSERT maps CSV fields by position. The value
+	// column is NOT NULL on purpose - a loader that turns a field into NULL
+	// then fails the load loudly instead of quietly storing one.
+	ddl string
+	// fileFlag is how the client is told to execute a file (nil means feed
+	// it on stdin).
+	fileFlag string
+	// queryFlag is how the client is given one statement to run.
+	queryFlag string
+	// selectHex returns "<id>:<hex of value>" per row, ordered by id. The id
+	// prefix keeps an empty value from reading as a blank line.
+	selectHex string
+	// encode renders an expected Go string the way this server stores it.
+	encode func(string) string
+	// bulkASCIIOnly restricts the bulk round-trip to ASCII values. Only
+	// mssql sets it, and only because BULK INSERT cannot read a UTF-8 file
+	// on SQL Server for Linux: CODEPAGE = '65001' would say so but is
+	// rejected on that platform, a UTF-8 collation on the target column does
+	// not help (it describes storage, not the file), and DATAFILETYPE cannot
+	// be combined with FORMAT = 'CSV'. TestIntegrationMSSQLBulkNonASCII pins
+	// the limitation so it is recorded rather than quietly skipped.
+	bulkASCIIOnly bool
+}
+
+func isASCIIOnly(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func utf8Hex(s string) string { return hex.EncodeToString([]byte(s)) }
+
+// utf16leHex is how mssql stores an nvarchar: UTF-16, little-endian, with
+// non-BMP characters as surrogate pairs.
+func utf16leHex(s string) string {
+	units := utf16.Encode([]rune(s))
+	b := make([]byte, 0, len(units)*2)
+	for _, u := range units {
+		b = append(b, byte(u), byte(u>>8))
+	}
+	return hex.EncodeToString(b)
+}
+
+func targets() []target {
+	return []target{
+		{
+			dialect:   "postgres",
+			service:   "postgres",
+			client:    []string{"psql", "-U", "postgres", "-d", "mockagen", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"},
+			ddl:       "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id text NOT NULL, v text NOT NULL);",
+			fileFlag:  "-f",
+			queryFlag: "-c",
+			selectHex: "SELECT id || ':' || encode(convert_to(v,'UTF8'),'hex') FROM vals ORDER BY id::int",
+			encode:    utf8Hex,
+		},
+		{
+			dialect: "mysql",
+			service: "mysql",
+			// --default-character-set is not optional: mockagen writes UTF-8,
+			// and without it the client announces latin1 and the server
+			// silently stores the mojibake re-encoding of every non-ASCII
+			// value. --local-infile is what the generated bulk script asks
+			// for; it is harmless in insert mode.
+			client:    []string{"mysql", "--default-character-set=utf8mb4", "--local-infile=1", "-uroot", "-pmockagen", "-D", "mockagen", "-N", "-B"},
+			ddl:       "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id text NOT NULL, v text NOT NULL);",
+			queryFlag: "-e",
+			selectHex: "SELECT CONCAT(id, ':', HEX(v)) FROM vals ORDER BY CAST(id AS SIGNED)",
+			encode:    utf8Hex,
+		},
+		{
+			dialect: "mssql",
+			service: "mssql",
+			// -C trusts the image's self-signed certificate, -b makes sqlcmd
+			// exit non-zero on a SQL error (it does not by default, so a
+			// failed load looked like a successful one), and -h -1 drops
+			// headers. The two width flags are both needed and fought each
+			// other to get right: sqlcmd wraps output at 80 columns (-w), and
+			// separately truncates a variable-length column at 256
+			// characters (-y), which silently cut the longest hex value in
+			// half. -y cannot be combined with -W, and -y 0 cannot be
+			// combined with -h, so the padding -W would have trimmed is
+			// trimmed in Go instead. 8000 is -y's maximum, which caps a test
+			// value at about 4000 characters.
+			client:        []string{"/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "Mockagen1!", "-C", "-b", "-d", "mockagen", "-h", "-1", "-w", "65535", "-y", "8000"},
+			initSQL:       []string{"IF DB_ID('mockagen') IS NULL CREATE DATABASE mockagen;"},
+			ddl:           "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id nvarchar(50) NOT NULL, v nvarchar(max) NOT NULL);",
+			fileFlag:      "-i",
+			queryFlag:     "-Q",
+			selectHex:     "SET NOCOUNT ON; SELECT CAST(id AS VARCHAR(50)) + ':' + CONVERT(VARCHAR(MAX), CONVERT(VARBINARY(MAX), v), 2) FROM vals ORDER BY CAST(id AS INT)",
+			encode:        utf16leHex,
+			bulkASCIIOnly: true,
+		},
+	}
+}
+
+// compose runs a docker compose subcommand.
+func compose(args ...string) (string, error) {
+	cmd := exec.Command("docker", append([]string{"compose", "-f", composeFile}, args...)...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// requireServer skips the test unless the service is up and healthy.
+func (tg target) requireServer(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not installed")
+	}
+	out, err := compose("ps", "--format", "{{.Service}} {{.Health}}")
+	if err != nil {
+		t.Skipf("docker compose unavailable: %v\n%s", err, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == tg.service {
+			if fields[1] == "healthy" {
+				return
+			}
+			t.Skipf("service %s is %q, not healthy - run `make db-up`", tg.service, fields[1])
+		}
+	}
+	t.Skipf("service %s is not running - run `make db-up`", tg.service)
+}
+
+// execIn runs argv inside the service, optionally with a working directory
+// and with stdin wired to a local file.
+func (tg target) execIn(t *testing.T, workdir, stdinPath string, argv ...string) string {
+	t.Helper()
+	args := []string{"compose", "-f", composeFile, "exec", "-T"}
+	if workdir != "" {
+		args = append(args, "-w", workdir)
+	}
+	args = append(args, tg.service)
+	args = append(args, argv...)
+
+	cmd := exec.Command("docker", args...)
+	if stdinPath != "" {
+		f, err := os.Open(stdinPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		cmd.Stdin = f
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s: %v\nstderr: %s\nstdout: %s", strings.Join(argv, " "), err, stderr.String(), out)
+	}
+	// mysql warns about the password on every invocation; it is not an error.
+	if s := stderr.String(); s != "" && !strings.Contains(s, "password on the command line") {
+		t.Logf("%s stderr: %s", tg.service, s)
+	}
+	return string(out)
+}
+
+// query runs one statement and returns stdout.
+func (tg target) query(t *testing.T, sql string) string {
+	t.Helper()
+	return tg.execIn(t, "", "", append(tg.client, tg.queryFlag, sql)...)
+}
+
+// runFile executes a file already copied into the container at
+// containerBundleDir, with that directory as the working directory.
+func (tg target) runFile(t *testing.T, name string) {
+	t.Helper()
+	if tg.fileFlag == "" {
+		// No file flag: feed it on stdin, which is what the generated mysql
+		// script's own instructions do.
+		tg.execIn(t, containerBundleDir, "", "sh", "-c",
+			strings.Join(tg.client, " ")+" < "+name)
+		return
+	}
+	tg.execIn(t, containerBundleDir, "", append(tg.client, tg.fileFlag, name)...)
+}
+
+// setup creates the database and table, and an empty bundle directory.
+func (tg target) setup(t *testing.T) {
+	t.Helper()
+	for _, sql := range tg.initSQL {
+		// The init statement runs against the server's default database, so
+		// it cannot carry -d mockagen before that database exists.
+		client := make([]string, 0, len(tg.client))
+		for i := 0; i < len(tg.client); i++ {
+			if tg.client[i] == "-d" {
+				i++
+				continue
+			}
+			client = append(client, tg.client[i])
+		}
+		tg.execIn(t, "", "", append(client, tg.queryFlag, sql)...)
+	}
+	tg.query(t, tg.ddl)
+	tg.execIn(t, "", "", "rm", "-rf", containerBundleDir)
+	tg.execIn(t, "", "", "mkdir", "-p", containerBundleDir)
+}
+
+// copyIn copies a local file into the container's bundle directory.
+func (tg target) copyIn(t *testing.T, localPath string) {
+	t.Helper()
+	dest := fmt.Sprintf("%s:%s/%s", tg.service, containerBundleDir, filepath.Base(localPath))
+	if out, err := compose("cp", localPath, dest); err != nil {
+		t.Fatalf("cp %s: %v\n%s", localPath, err, out)
+	}
+}
+
+// loaded reads the table back and returns value hex keyed by row id.
+func (tg target) loaded(t *testing.T) map[int]string {
+	t.Helper()
+	out := tg.query(t, tg.selectHex)
+	got := make(map[int]string)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		id, hexVal, ok := strings.Cut(line, ":")
+		if !ok {
+			t.Fatalf("unparsable row %q in:\n%s", line, out)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(id))
+		if err != nil {
+			t.Fatalf("unparsable id in row %q", line)
+		}
+		got[n] = strings.ToLower(strings.TrimSpace(hexVal))
+	}
+	return got
+}
+
+// compare checks every value came back byte-for-byte.
+func (tg target) compare(t *testing.T, want []string, got map[int]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("loaded %d rows, want %d", len(got), len(want))
+	}
+	for i, v := range want {
+		wantHex := strings.ToLower(tg.encode(v))
+		if got[i] != wantHex {
+			t.Errorf("row %d (%q):\n got %s\nwant %s", i, v, got[i], wantHex)
+		}
+	}
+}
+
+// writeRecords runs the values through newRecordWriter for the given config,
+// returning the directory it wrote into.
+func writeRecords(t *testing.T, config mockagen.MockagenConfig, values []string, outName string) string {
+	t.Helper()
+	cols := []string{"id", "v"}
+	structArr, recType := csvRecordType(cols)
+	for i := range structArr {
+		// The sql writer reads the `sql` tag, the csv writer the `csv` one;
+		// the generator writes both, so mirror that here.
+		structArr[i].Tag = reflect.StructTag(fmt.Sprintf("csv:%q sql:%q", cols[i], cols[i]))
+	}
+	config.Columns = []mockagen.MockagenColumn{{Name: "id"}, {Name: "v"}}
+
+	dir := t.TempDir()
+	w, err := newRecordWriter(config, structArr, filepath.Join(dir, outName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range values {
+		rec := reflect.New(recType).Elem()
+		rec.Field(0).SetString(strconv.Itoa(i))
+		rec.Field(1).SetString(v)
+		if err := w.WriteRecord(rec.Interface()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestIntegrationInsert loads the INSERT statements each dialect generates and
+// checks every value survives.
+func TestIntegrationInsert(t *testing.T) {
+	values := integrationValues()
+	for _, tg := range targets() {
+		t.Run(tg.dialect, func(t *testing.T) {
+			tg.requireServer(t)
+			tg.setup(t)
+
+			dir := writeRecords(t, mockagen.MockagenConfig{
+				FileFormat: "sql",
+				Dialect:    tg.dialect,
+				Table:      "vals",
+			}, values, "out.sql")
+
+			tg.copyIn(t, filepath.Join(dir, "out.sql"))
+			tg.runFile(t, "out.sql")
+			tg.compare(t, values, tg.loaded(t))
+		})
+	}
+}
+
+// TestIntegrationBulk loads the bundle each dialect generates, run the way
+// the generated script's own comments say to: from the directory holding both
+// files, with the server's own client.
+func TestIntegrationBulk(t *testing.T) {
+	for _, tg := range targets() {
+		t.Run(tg.dialect, func(t *testing.T) {
+			tg.requireServer(t)
+			tg.setup(t)
+
+			values := integrationValues()
+			if tg.bulkASCIIOnly {
+				var ascii []string
+				for _, v := range values {
+					if isASCIIOnly(v) {
+						ascii = append(ascii, v)
+					}
+				}
+				t.Logf("restricted to %d ASCII values of %d; see bulkASCIIOnly",
+					len(ascii), len(values))
+				values = ascii
+			}
+
+			dir := writeRecords(t, mockagen.MockagenConfig{
+				FileFormat:    "sql",
+				Mode:          "bulk",
+				Dialect:       tg.dialect,
+				Table:         "vals",
+				IncludeHeader: true,
+			}, values, "out.sql")
+
+			script := filepath.Join(dir, "out.load.sql")
+			if tg.dialect == "mssql" {
+				// BULK INSERT resolves the path in the server process, not in
+				// the directory sqlcmd runs from, so the generated script says
+				// to substitute an absolute path once the bundle is unpacked
+				// on the server. Do exactly that - it is the documented
+				// workaround, and this is what checks it works.
+				b, err := os.ReadFile(script)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixed := strings.Replace(string(b), "FROM 'out.csv'",
+					"FROM '"+containerBundleDir+"/out.csv'", 1)
+				if fixed == string(b) {
+					t.Fatal("expected the mssql script to reference 'out.csv' by bare name")
+				}
+				if err := os.WriteFile(script, []byte(fixed), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			tg.copyIn(t, filepath.Join(dir, "out.csv"))
+			tg.copyIn(t, script)
+			tg.runFile(t, "out.load.sql")
+			tg.compare(t, values, tg.loaded(t))
+		})
+	}
+}
+
+// TestIntegrationMSSQLUnicodePrefix is the targeted check for the one piece of
+// dialect handling whose absence corrupts data silently rather than failing:
+// without the N” prefix an nvarchar literal is parsed as varchar first, and
+// anything outside the server's code page becomes a question mark.
+func TestIntegrationMSSQLUnicodePrefix(t *testing.T) {
+	var tg target
+	for _, candidate := range targets() {
+		if candidate.dialect == "mssql" {
+			tg = candidate
+		}
+	}
+	tg.requireServer(t)
+	tg.setup(t)
+
+	const value = "日本🎉"
+	tg.query(t, fmt.Sprintf("INSERT INTO vals (id, v) VALUES ('1', N'%s'), ('2', '%s');", value, value))
+	got := tg.loaded(t)
+
+	if want := strings.ToLower(utf16leHex(value)); got[1] != want {
+		t.Errorf("N'' literal: got %s, want %s", got[1], want)
+	}
+	if got[2] == strings.ToLower(utf16leHex(value)) {
+		t.Error("an unprefixed literal preserved non-ASCII; the N'' prefix may no longer be needed")
+	} else {
+		t.Logf("confirmed: an unprefixed literal degraded to %s", got[2])
+	}
+}
+
+// TestIntegrationMSSQLBulkNonASCII records a limitation rather than a bug in
+// mockagen: BULK INSERT on SQL Server for Linux reads the UTF-8 CSV in the
+// server's default codepage, so non-ASCII values are stored as mojibake.
+// CODEPAGE = '65001' is the documented fix and the platform rejects it; the
+// generated script says so and points at mode: insert, which carries unicode
+// correctly through its N” literals (TestIntegrationInsert/mssql proves it).
+//
+// If this test ever fails because the value survived, the limitation is gone:
+// re-add CODEPAGE to the generated script and update the README.
+func TestIntegrationMSSQLBulkNonASCII(t *testing.T) {
+	var tg target
+	for _, candidate := range targets() {
+		if candidate.dialect == "mssql" {
+			tg = candidate
+		}
+	}
+	tg.requireServer(t)
+	tg.setup(t)
+
+	const value = "日本語"
+	dir := writeRecords(t, mockagen.MockagenConfig{
+		FileFormat:    "sql",
+		Mode:          "bulk",
+		Dialect:       "mssql",
+		Table:         "vals",
+		IncludeHeader: true,
+	}, []string{value}, "out.sql")
+
+	script := filepath.Join(dir, "out.load.sql")
+	b, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte(strings.Replace(string(b),
+		"FROM 'out.csv'", "FROM '"+containerBundleDir+"/out.csv'", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tg.copyIn(t, filepath.Join(dir, "out.csv"))
+	tg.copyIn(t, script)
+	tg.runFile(t, "out.load.sql")
+
+	got := tg.loaded(t)[0]
+	if got == strings.ToLower(utf16leHex(value)) {
+		t.Error("non-ASCII survived mssql BULK INSERT: the Linux CODEPAGE limitation " +
+			"appears fixed - re-add CODEPAGE = '65001' to the script and update the README")
+	}
+	t.Logf("confirmed limitation: %q loaded as %s, not %s",
+		value, got, strings.ToLower(utf16leHex(value)))
+
+	// The script must warn about exactly this, so a user does not discover it
+	// the way this test did.
+	for _, want := range []string{"NON-ASCII", "CODEPAGE", "Linux", "mode: insert"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("generated mssql script should mention %q", want)
+		}
+	}
+}

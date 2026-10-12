@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Run the unit tests (no containers needed)"
+set -euo pipefail
+go test ./...

@@ -814,13 +814,13 @@ func TestBulkLoadScript(t *testing.T) {
 			`\copy "users" ("id", "email") FROM 'users.csv' WITH (FORMAT csv)`},
 		{"mysql", "users", true,
 			"LOAD DATA LOCAL INFILE 'users.csv' INTO TABLE `users`\n" +
-				"\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"'\n" +
+				"\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY ''\n" +
 				"\tLINES TERMINATED BY '\\n'\n" +
 				"\tIGNORE 1 LINES\n" +
 				"\t(`id`, `email`);"},
 		{"mysql", "users", false,
 			"LOAD DATA LOCAL INFILE 'users.csv' INTO TABLE `users`\n" +
-				"\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"'\n" +
+				"\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY ''\n" +
 				"\tLINES TERMINATED BY '\\n'\n" +
 				"\t(`id`, `email`);"},
 		{"mssql", "dbo.users", true,
@@ -860,7 +860,7 @@ func TestBulkLoadScriptMSSQLWarnsAboutPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(bulkLoadScript(d, "users", []string{"id"}, "users.csv", true))
-	for _, want := range []string{"WARNING", "SERVER", "bcp", "POSITION"} {
+	for _, want := range []string{"WARNING", "SERVER", "bcp", "POSITION", "65001"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("mssql script should mention %q:\n%s", want, script)
 		}
@@ -906,7 +906,8 @@ func TestSQLBulkWriterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("data file: %v", err)
 	}
-	if want := "id,email\n1,a@example.com\n"; string(csvBytes) != want {
+	// Bulk mode quotes every field, unlike the plain csv format.
+	if want := "\"id\",\"email\"\n\"1\",\"a@example.com\"\n"; string(csvBytes) != want {
 		t.Errorf("data file: got %q, want %q", csvBytes, want)
 	}
 	scriptBytes, err := os.ReadFile(filepath.Join(dir, "out.load.sql"))
@@ -1166,5 +1167,64 @@ func TestFixedWidthWriterRoundTrip(t *testing.T) {
 		if got := strings.TrimRight(line[10:20], " "); got != want[i][1] {
 			t.Errorf("line %d cols 11-20: got %q, want %q", i, got, want[i][1])
 		}
+	}
+}
+
+// TestBulkCSVQuotesEverything pins the two values that bulk loaders
+// reinterpret when a field arrives unquoted: an empty one becomes NULL in
+// postgres and mssql, and the bare word NULL becomes NULL in mysql. Both were
+// found by TestIntegrationBulk against real servers, and both are invisible
+// in the plain csv format, which leaves these fields bare by design.
+func TestBulkCSVQuotesEverything(t *testing.T) {
+	cols := []string{"id", "v"}
+	structArr, recType := csvRecordType(cols)
+
+	render := func(t *testing.T, bulk bool, value string) string {
+		t.Helper()
+		f, err := os.Create(filepath.Join(t.TempDir(), "out.csv"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var w *csvWriter
+		if bulk {
+			w = newBulkCSVWriter(f, structArr, false)
+		} else {
+			w = newCSVWriter(f, structArr, false)
+		}
+		rec := reflect.New(recType).Elem()
+		rec.Field(0).SetString("1")
+		rec.Field(1).SetString(value)
+		if err := w.WriteRecord(rec.Interface()); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	for _, tc := range []struct {
+		value    string
+		wantCSV  string
+		wantBulk string
+	}{
+		{"", "1,\n", "\"1\",\"\"\n"},
+		{"NULL", "1,NULL\n", "\"1\",\"NULL\"\n"},
+		{"plain", "1,plain\n", "\"1\",\"plain\"\n"},
+		// A value that needed quotes anyway is identical either way.
+		{"a,b", "1,\"a,b\"\n", "\"1\",\"a,b\"\n"},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.value), func(t *testing.T) {
+			if got := render(t, false, tc.value); got != tc.wantCSV {
+				t.Errorf("csv format: got %q, want %q", got, tc.wantCSV)
+			}
+			if got := render(t, true, tc.value); got != tc.wantBulk {
+				t.Errorf("bulk mode: got %q, want %q", got, tc.wantBulk)
+			}
+		})
 	}
 }

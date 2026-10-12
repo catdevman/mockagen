@@ -502,10 +502,13 @@ type sqlDialect struct {
 	// needs no special handling - and the generator cannot produce one that
 	// would break out of the quotes.
 	identOpen, identClose byte
-	// escapeBackslash doubles a backslash inside a string literal. MySQL
-	// treats backslash as an escape character by default (NO_BACKSLASH_ESCAPES
-	// off), so a lone one would swallow the character after it; the other
-	// three take it literally and doubling it there would insert two.
+	// escapeBackslash says backslash is an escape character inside a string
+	// literal, which MySQL alone treats it as by default (NO_BACKSLASH_ESCAPES
+	// off). That means a lone backslash would swallow the character after it,
+	// so each is doubled - and it also means CR and LF can be written as the
+	// escapes \r and \n rather than as raw bytes. The other three take
+	// backslash literally, where doubling would insert two and \r would read
+	// as the letter r.
 	escapeBackslash bool
 	// unicodePrefix is written before a literal containing non-ASCII text.
 	// SQL Server needs N'...' to make it an nvarchar literal - an unprefixed
@@ -591,6 +594,9 @@ func (d sqlDialect) appendQualifiedIdent(dst []byte, name string) []byte {
 // multi-byte UTF-8 sequence has its high bit set, and so can never equal one
 // of the ASCII bytes being escaped - the non-ASCII bytes simply pass through.
 //
+// A CR or LF is written as an escape where the dialect supports one; see the
+// case below for why that is not cosmetic.
+//
 // NUL is dropped. No dialect here can carry one in a literal: Postgres
 // rejects it in text outright, SQLite's own quoting truncates at it, and only
 // MySQL's \0 escape would survive - so there is no byte sequence that means
@@ -610,6 +616,22 @@ func (d sqlDialect) appendString(dst []byte, s string) []byte {
 				dst = append(dst, '\\')
 			}
 			dst = append(dst, '\\')
+		case '\r', '\n':
+			// Only where backslash escapes are available. A raw CR is the
+			// problem case: the mysql client strips it from the end of an
+			// input line so it tolerates CRLF-terminated scripts, and does
+			// so even inside a quoted literal, which silently turns a
+			// generated CRLF into a bare LF. Escaping both keeps every
+			// literal on one line and immune to any line-based handling.
+			if !d.escapeBackslash {
+				dst = append(dst, c)
+				break
+			}
+			if c == '\r' {
+				dst = append(dst, '\\', 'r')
+			} else {
+				dst = append(dst, '\\', 'n')
+			}
 		case 0:
 		default:
 			dst = append(dst, c)
@@ -794,15 +816,16 @@ func csvNeedsQuotes(s string) bool {
 	return unicode.IsSpace(r)
 }
 
-// appendCSVField appends s as one field, quoting and escaping it only where
-// the format requires. Inside quotes the single transformation is doubling a
-// quote: CR and LF are legal verbatim in a quoted field, so passing them
+// appendCSVField appends s as one field. With always set it is quoted
+// regardless; otherwise it is quoted only where the format requires, which is
+// what encoding/csv does. Inside quotes the single transformation is doubling
+// a quote: CR and LF are legal verbatim in a quoted field, so passing them
 // through keeps the value byte-identical through a round trip.
 //
 // The loop is bytewise because a quote cannot occur inside a multi-byte UTF-8
 // sequence, so non-ASCII simply passes through.
-func appendCSVField(dst []byte, s string) []byte {
-	if !csvNeedsQuotes(s) {
+func appendCSVField(dst []byte, s string, always bool) []byte {
+	if !always && !csvNeedsQuotes(s) {
 		return append(dst, s...)
 	}
 	dst = append(dst, '"')
@@ -831,6 +854,9 @@ type csvWriter struct {
 	w       *bufio.Writer
 	numCols int
 	buf     []byte
+	// quoteAll quotes every field rather than only those the format
+	// requires. Bulk loading needs it; see newBulkCSVWriter.
+	quoteAll bool
 }
 
 // newCSVWriter writes the header row immediately when one is wanted, so the
@@ -838,7 +864,30 @@ type csvWriter struct {
 // the json writer's opening bracket, the write lands in the bufio.Writer and
 // any error surfaces from Close's Flush.
 func newCSVWriter(f *os.File, structArr []reflect.StructField, includeHeader bool) *csvWriter {
-	w := &csvWriter{f: f, w: bufio.NewWriter(f), numCols: len(structArr)}
+	return newCSVWriterOpts(f, structArr, includeHeader, false)
+}
+
+// newBulkCSVWriter is the variant the sql format's bulk mode uses: identical
+// except that every field is quoted.
+//
+// Quoting is not cosmetic there. All three bulk loaders tell NULL apart from
+// text by whether the field was quoted, so a field this writer would
+// otherwise leave bare gets reinterpreted on the way in:
+//
+//   - postgres COPY and mssql BULK INSERT read an unquoted empty field as
+//     NULL, and a quoted one as the empty string;
+//   - mysql LOAD DATA, with FIELDS ENCLOSED BY set, reads the unquoted word
+//     NULL as NULL and the quoted one as those four characters.
+//
+// Both were caught by TestIntegrationBulk loading data this writer produced.
+// The plain csv format keeps the narrow rule, where staying byte-identical to
+// encoding/csv is worth more than disambiguating for a loader.
+func newBulkCSVWriter(f *os.File, structArr []reflect.StructField, includeHeader bool) *csvWriter {
+	return newCSVWriterOpts(f, structArr, includeHeader, true)
+}
+
+func newCSVWriterOpts(f *os.File, structArr []reflect.StructField, includeHeader, quoteAll bool) *csvWriter {
+	w := &csvWriter{f: f, w: bufio.NewWriter(f), numCols: len(structArr), quoteAll: quoteAll}
 	if !includeHeader {
 		return w
 	}
@@ -846,7 +895,7 @@ func newCSVWriter(f *os.File, structArr []reflect.StructField, includeHeader boo
 		if i > 0 {
 			w.buf = append(w.buf, ',')
 		}
-		w.buf = appendCSVField(w.buf, csvColumnName(field))
+		w.buf = appendCSVField(w.buf, csvColumnName(field), quoteAll)
 	}
 	w.buf = append(w.buf, '\n')
 	w.w.Write(w.buf)
@@ -875,9 +924,9 @@ func (w *csvWriter) WriteRecord(rec any) error {
 		}
 		field := v.Field(i)
 		if field.Kind() == reflect.String {
-			w.buf = appendCSVField(w.buf, field.String())
+			w.buf = appendCSVField(w.buf, field.String(), w.quoteAll)
 		} else {
-			w.buf = appendCSVField(w.buf, fmt.Sprint(field.Interface()))
+			w.buf = appendCSVField(w.buf, fmt.Sprint(field.Interface()), w.quoteAll)
 		}
 	}
 	w.buf = append(w.buf, '\n')
@@ -965,7 +1014,7 @@ func newSQLBulkWriter(outputFile string, d sqlDialect, table string, structArr [
 		cols[i] = csvColumnName(field)
 	}
 	return &sqlBulkWriter{
-		csv:        newCSVWriter(f, structArr, includeHeader),
+		csv:        newBulkCSVWriter(f, structArr, includeHeader),
 		scriptPath: base + ".load.sql",
 		// The script names the CSV by base name only, so it resolves when the
 		// script is run from the directory holding both files.
@@ -1042,7 +1091,13 @@ func bulkLoadScript(d sqlDialect, table string, cols []string, csvName string, i
 		b.WriteString("-- To load empty fields as NULL, read the columns into variables and SET each\n")
 		b.WriteString("-- one to NULLIF(@col, '') in place of the plain column list below.\n")
 		fmt.Fprintf(&b, "LOAD DATA LOCAL INFILE '%s' INTO TABLE %s\n", csvName, quotedTable)
-		b.WriteString("\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"'\n")
+		// ESCAPED BY '' is not optional. LOAD DATA defaults to treating
+		// backslash as an escape character, so a backslash in the data -
+		// which the CSV carries literally, RFC 4180 having no escape
+		// character but the doubled quote - would be swallowed along with
+		// whatever followed it. Caught by TestIntegrationBulk, where "\\."
+		// arrived as ".".
+		b.WriteString("\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY ''\n")
 		b.WriteString("\tLINES TERMINATED BY '\\n'\n")
 		if includeHeader {
 			b.WriteString("\tIGNORE 1 LINES\n")
@@ -1062,7 +1117,19 @@ func bulkLoadScript(d sqlDialect, table string, cols []string, csvName string, i
 		b.WriteString("-- BULK INSERT takes no column list: it maps CSV fields to table columns by\n")
 		b.WriteString("-- POSITION, so the table's column order must match the CSV's, which is:\n")
 		fmt.Fprintf(&b, "--   %s\n--\n", strings.Join(cols, ", "))
-		b.WriteString("-- FORMAT = 'CSV' needs SQL Server 2017 or later.\n")
+		b.WriteString("-- FORMAT = 'CSV' needs SQL Server 2017 or later.\n--\n")
+		b.WriteString("-- NON-ASCII DATA: the CSV is UTF-8, and BULK INSERT otherwise reads it in\n")
+		b.WriteString("-- the server's default codepage, silently storing mojibake. On Windows,\n")
+		b.WriteString("-- add CODEPAGE = '65001' to the WITH list to fix that. On SQL Server for\n")
+		b.WriteString("-- Linux that option is rejected outright (\"Keyword or statement option\n")
+		b.WriteString("-- 'CODEPAGE' is not supported on the 'Linux' platform\"), and neither a\n")
+		b.WriteString("-- UTF-8 collation on the target column nor DATAFILETYPE helps - the\n")
+		b.WriteString("-- latter cannot be combined with FORMAT = 'CSV' at all. If your data has\n")
+		b.WriteString("-- non-ASCII values and your server runs on Linux, use mode: insert\n")
+		b.WriteString("-- instead: its N'' literals carry unicode correctly.\n--\n")
+		b.WriteString("-- One quirk to know: BULK INSERT loads an empty field as NULL rather than\n")
+		b.WriteString("-- as an empty string when the target column is nullable, even though the\n")
+		b.WriteString("-- CSV quotes it. Declare the column NOT NULL if you need '' preserved.\n")
 		fmt.Fprintf(&b, "BULK INSERT %s\n\tFROM '%s'\n", quotedTable, csvName)
 		firstRow := 1
 		if includeHeader {

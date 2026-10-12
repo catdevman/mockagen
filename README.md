@@ -207,11 +207,79 @@ Two things to know:
   would rewrite legitimately empty text. Each script carries the one-line
   change as a comment rather than applying it.
 
+Two dialect limitations the integration tests pin down:
+
+- **mysql** needs `--default-character-set=utf8mb4` on the client. mockagen
+  writes UTF-8; without the flag the client announces latin1 and the server
+  stores the mojibake re-encoding of every non-ASCII value. The generated
+  script's invocation includes it.
+- **mssql bulk cannot load non-ASCII on SQL Server for Linux.** `BULK INSERT`
+  reads the file in the server's default codepage; `CODEPAGE = '65001'` is the
+  documented fix and that platform rejects it outright, while neither a UTF-8
+  collation on the target column nor `DATAFILETYPE` is a way round it. Use
+  `mode: insert` there - its `N''` literals carry unicode correctly. On Windows
+  SQL Server, add `CODEPAGE = '65001'` to the generated `WITH` list.
+
 `mode: bulk` with `dialect: sqlite` rejects a schema-qualified `table`:
 sqlite's `.import` takes a bare table argument and would otherwise create a
 table whose name contains the dot, having exited successfully. See
 [test_data/config/users.schema.bulk.yaml](test_data/config/users.schema.bulk.yaml)
 for a full example.
+
+## Developer tasks
+
+Tasks are scripts in [.config/mise/tasks/](.config/mise/tasks). `mise tasks`
+lists them:
+
+```
+$ mise tasks
+bench             Run the benchmarks once against the working tree
+bench-compare     A/B the working tree against another commit, interleaved, then benchstat
+build             Build the mockagen binary into ./mockagen
+clean             Remove the built binary
+db-down           Stop the database containers and remove their volumes
+db-logs           Tail the database containers' logs
+db-up             Start the postgres, mysql and SQL Server containers and wait for them
+lint              Check formatting and run go vet, including the integration build tag
+test              Run the unit tests (no containers needed)
+test-integration  Run the SQL integration tests against the containers (needs db-up)
+```
+
+Run one with `mise run <name>`, and pass `--help` to any that take arguments:
+
+```sh
+mise run bench-compare --help     # [base] (default main), [rounds] (default 6)
+mise run bench-compare HEAD~1 10
+```
+
+`mise install` provisions the Go toolchain pinned in
+[.config/mise/config.toml](.config/mise/config.toml) to match go.mod. The CI
+workflows use none of this - they call `go` directly and take their toolchain
+from go.mod - so tasks can change freely without touching them.
+
+## Integration tests
+
+The unit tests pin what each dialect's bytes look like. The integration tests
+check those bytes actually load, by running them through real postgres, mysql
+and sqlite servers (and SQL Server), then reading every value back and
+comparing it byte for byte:
+
+```sh
+mise run db-up            # start the servers and wait for them
+mise run test-integration # run against them
+mise run db-down          # stop and remove, volumes included
+```
+
+They are behind a `integration` build tag, so `mise run test` stays fast and needs
+no containers, and they skip rather than fail when the servers are not up.
+Each one drives its server's own CLI client rather than a Go SQL driver,
+because that is what the bulk scripts are written for - psql's `\copy` and
+mysql's `LOAD DATA LOCAL INFILE` are client features a driver never exercises.
+
+They earn their keep: the quote-everything rule in bulk mode, mysql's
+`ESCAPED BY ''`, the CR escaping in mysql literals, and both mssql
+limitations above were all found this way, by loading data that had passed
+every golden-output test.
 
 ## Benchmarks
 

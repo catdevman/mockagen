@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Build the mockagen binary into ./mockagen"
+#MISE depends=["clean"]
+set -euo pipefail
+go build -o mockagen ./cmd/mockagen

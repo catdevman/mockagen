@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="Check formatting and run go vet, including the integration build tag"
+set -euo pipefail
+
+unformatted=$(gofmt -l ./cmd ./pkg ./scripts)
+if [ -n "$unformatted" ]; then
+  echo "gofmt needed:"
+  echo "$unformatted"
+  exit 1
+fi
+
+go vet ./...
+# The integration tests are behind a build tag, so they are invisible to the
+# plain vet above.
+go vet -tags=integration ./...

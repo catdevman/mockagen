@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Remove the built binary"
+set -euo pipefail
+rm -rf mockagen

@@ -2,7 +2,7 @@
 
 ## What the suite covers
 
-All benchmarks live in `./cmd/mockagen` and run under `make bench`.
+All benchmarks live in `./cmd/mockagen` and run under `mise run bench`.
 
 | Benchmark | Measures |
 |---|---|
@@ -258,10 +258,11 @@ The workflow does not fail on regression - it reports.
 ## Running it locally
 
 ```sh
-make bench                        # one pass over the working tree
-make bench-compare BASE=main    # same interleaved A/B as CI, then the report
-ROUNDS=10 make bench-compare BASE=HEAD~1
+mise run bench                      # one pass over the working tree
+mise run bench-compare              # same interleaved A/B as CI, then the report
+mise run bench-compare HEAD~1 10    # against another commit, with 10 rounds
+mise run bench-compare --help       # argument names and defaults
 ```
 
-`make bench-compare BASE=HEAD` is a useful control: identical code on both sides
+`mise run bench-compare HEAD` is a useful control: identical code on both sides
 should report no regressions, and shows you how much noise your machine has.
