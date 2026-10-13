@@ -1,9 +1,13 @@
 package mockagen
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
 func TestLoadConfig_JSON(t *testing.T) {
@@ -120,6 +124,64 @@ func TestLoadConfig_YAML(t *testing.T) {
 	}
 	if len(cfg.Columns) != 7 {
 		t.Fatalf("Columns: got %d, want 7", len(cfg.Columns))
+	}
+}
+
+// TestLoadConfig_YML guards the .yml extension against being rejected:
+// allowedExt historically accepted .yaml only, panicking on .yml. This table
+// test validates that configs in all three canonical formats (YAML, JSON,
+// TOML) decode identically when persisted as a .yml file.
+func TestLoadConfig_YML(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+	}{
+		{
+			name:   "yaml source",
+			source: "../../test_data/config/Mockadoo.schema.yaml",
+		},
+		{
+			name:   "json source",
+			source: "../../test_data/config/single.schema.json",
+		},
+		{
+			name:   "toml source",
+			source: "../../test_data/config/single.schema.toml",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := LoadConfig(tc.source)
+			data, err := yaml.Marshal(orig)
+			if err != nil {
+				t.Fatalf("yaml.Marshal: %v", err)
+			}
+			path := filepath.Join(t.TempDir(), "schema.yml")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			got := LoadConfig(path)
+			if got.Name != orig.Name {
+				t.Errorf("Name: got %q, want %q", got.Name, orig.Name)
+			}
+			if got.NumberOfRecords != orig.NumberOfRecords {
+				t.Errorf("NumberOfRecords: got %d, want %d", got.NumberOfRecords, orig.NumberOfRecords)
+			}
+			if got.FileFormat != orig.FileFormat {
+				t.Errorf("FileFormat: got %q, want %q", got.FileFormat, orig.FileFormat)
+			}
+			if len(got.Columns) != len(orig.Columns) {
+				t.Fatalf("Columns count: got %d, want %d", len(got.Columns), len(orig.Columns))
+			}
+			for i := range orig.Columns {
+				if got.Columns[i].Name != orig.Columns[i].Name {
+					t.Errorf("col[%d] Name: got %q, want %q", i, got.Columns[i].Name, orig.Columns[i].Name)
+				}
+				if got.Columns[i].Type != orig.Columns[i].Type {
+					t.Errorf("col[%d] Type: got %q, want %q", i, got.Columns[i].Type, orig.Columns[i].Type)
+				}
+			}
+		})
 	}
 }
 
@@ -282,4 +344,132 @@ func TestLoadConfig_InvalidYAML_Panics(t *testing.T) {
 		}
 	}()
 	LoadConfig(path)
+}
+
+// TestLoad_KindDispatch verifies that kind-less files default to Spec, files
+// with explicit kind: Spec load identically, and an unrecognised kind returns
+// ErrUnknownKind.
+func TestLoad_KindDispatch(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		ext      string
+		wantErr  error
+		wantKind string
+	}{
+		{
+			name: "kind-less yaml defaults to Spec",
+			content: `name: test
+num_rows: 5
+file_format: csv
+columns:
+  - name: id
+    type: GUID
+`,
+			ext:      ".yaml",
+			wantKind: "Spec",
+		},
+		{
+			name: "explicit kind Spec in yaml",
+			content: `version: mockagen/v1
+kind: Spec
+name: test
+num_rows: 5
+file_format: csv
+columns:
+  - name: id
+    type: GUID
+`,
+			ext:      ".yaml",
+			wantKind: "Spec",
+		},
+		{
+			name: "explicit lowercase kind spec in json",
+			content: `{
+  "version": "mockagen/v1",
+  "kind": "spec",
+  "name": "test",
+  "num_rows": 5,
+  "file_format": "json",
+  "columns": [
+    {"name": "id", "type": "GUID"}
+  ]
+}`,
+			ext:      ".json",
+			wantKind: "Spec",
+		},
+		{
+			name: "unknown kind returns ErrUnknownKind",
+			content: `version: mockagen/v1
+kind: MysteryKind
+name: test
+num_rows: 5
+file_format: csv
+columns:
+  - name: id
+    type: GUID
+`,
+			ext:     ".yaml",
+			wantErr: ErrUnknownKind,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config"+tc.ext)
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if tc.wantErr != nil {
+				if err == nil {
+					t.Fatalf("Load(%s) expected error %v, got nil", tc.name, tc.wantErr)
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Errorf("Load(%s) error = %v, want %v", tc.name, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load(%s) unexpected error: %v", tc.name, err)
+			}
+			if cfg.Kind != tc.wantKind {
+				t.Errorf("cfg.Kind = %q, want %q", cfg.Kind, tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestLoad_UnknownColumnType guards against silent fallback to random string
+// generation by ensuring unrecognised column types return ErrUnknownColumnType
+// naming both the offending column and the unrecognised type.
+func TestLoad_UnknownColumnType(t *testing.T) {
+	content := `name: bad_type_test
+num_rows: 1
+file_format: json
+columns:
+  - name: good_col
+    type: GUID
+  - name: bad_col
+    type: NonExistentGeneratorType
+`
+	path := filepath.Join(t.TempDir(), "bad_col.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown column type, got nil")
+	}
+	if !errors.Is(err, ErrUnknownColumnType) {
+		t.Errorf("error = %v, want %v", err, ErrUnknownColumnType)
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "bad_col") {
+		t.Errorf("error %q should mention column name bad_col", errMsg)
+	}
+	if !strings.Contains(errMsg, "NonExistentGeneratorType") {
+		t.Errorf("error %q should mention type name NonExistentGeneratorType", errMsg)
+	}
 }

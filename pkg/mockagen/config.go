@@ -1,7 +1,12 @@
 package mockagen
 
-// MockagenConfig -
+// MockagenConfig specifies how mock data is generated and formatted.
 type MockagenConfig struct {
+	// Version identifies the schema format version (e.g. mockagen/v1).
+	Version string `yaml:"version" json:"version" toml:"version"`
+	// Kind discriminates the file type (Spec, Schema, FieldMap) so that
+	// envelope decoders dispatch to the correct concrete schema structure.
+	Kind            string `yaml:"kind" json:"kind" toml:"kind"`
 	NumberOfRecords int    `yaml:"num_rows" json:"num_rows" toml:"num_rows"`
 	FileFormat      string `yaml:"file_format" json:"file_format" toml:"file_format"`
 	Name            string `yaml:"name" json:"name" toml:"name"`

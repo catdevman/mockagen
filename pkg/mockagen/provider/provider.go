@@ -73,6 +73,13 @@ func init() {
 // silently fall through to faker generating a plain random string.
 var registered = map[string]bool{}
 
+// IsRegistered reports whether tag was registered by this package at init
+// time, allowing external catalogs and meta-tests to distinguish
+// provider-registered faker tags from unrecognised strings.
+func IsRegistered(tag string) bool {
+	return registered[tag]
+}
+
 // register wires a zero-argument string generator up to a faker tag.
 func register(tag string, gen func() string) {
 	registered[tag] = true

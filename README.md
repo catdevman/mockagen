@@ -237,12 +237,9 @@ bench             Run the benchmarks once against the working tree
 bench-compare     A/B the working tree against another commit, interleaved, then benchstat
 build             Build the mockagen binary into ./mockagen
 clean             Remove the built binary
-db-down           Stop the database containers and remove their volumes
-db-logs           Tail the database containers' logs
-db-up             Start the postgres, mysql and SQL Server containers and wait for them
 lint              Check formatting and run go vet, including the integration build tag
 test              Run the unit tests (no containers needed)
-test-integration  Run the SQL integration tests against the containers (needs db-up)
+test-integration  Run the SQL integration tests (starts and removes its own servers)
 ```
 
 Run one with `mise run <name>`, and pass `--help` to any that take arguments:
@@ -265,16 +262,29 @@ and sqlite servers (and SQL Server), then reading every value back and
 comparing it byte for byte:
 
 ```sh
-mise run db-up            # start the servers and wait for them
-mise run test-integration # run against them
-mise run db-down          # stop and remove, volumes included
+mise run test-integration
 ```
 
-They are behind a `integration` build tag, so `mise run test` stays fast and needs
-no containers, and they skip rather than fail when the servers are not up.
-Each one drives its server's own CLI client rather than a Go SQL driver,
-because that is what the bulk scripts are written for - psql's `\copy` and
-mysql's `LOAD DATA LOCAL INFILE` are client features a driver never exercises.
+That is the whole workflow. The servers are declared in
+[integration_test.go](cmd/mockagen/integration_test.go) and started with
+testcontainers: each comes up the first time a test needs it - so running one
+dialect's subtest never starts SQL Server - and all of them are removed when
+the package's tests finish. testcontainers' reaper removes them even if the
+run panics or is killed, so a cancelled run cannot leave three database
+servers behind.
+
+The tests are behind an `integration` build tag, so `mise run test` stays fast
+and touches no containers, and they skip rather than fail where docker is not
+installed. Each one drives its server's own CLI client rather than a Go SQL
+driver, because that is what the bulk scripts are written for - psql's
+`\copy` and mysql's `LOAD DATA LOCAL INFILE` are client features a driver
+never exercises; testcontainers is here for the lifecycle and for
+`Exec`/`CopyFileToContainer`, not for a connection string.
+
+Readiness is checked by running each server's own client inside its container
+(`pg_isready`, `mysqladmin ping`, `sqlcmd -Q "SELECT 1"`) rather than by
+probing a port, because all three of these images accept a connection before
+they will answer a query.
 
 They earn their keep: the quote-everything rule in bulk mode, mysql's
 `ESCAPED BY ''`, the CR escaping in mysql literals, and both mssql

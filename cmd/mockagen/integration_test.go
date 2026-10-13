@@ -9,33 +9,135 @@
 // prefix, and each one's bulk loader - because getting those wrong produces
 // corrupted data rather than an error.
 //
-// Servers come from test/docker-compose.yml:
+// The servers are declared below and started with testcontainers: each one
+// comes up the first time a test needs it and is removed when the package's
+// tests finish, so `mise run test-integration` is the whole workflow and a
+// panic or a Ctrl-C cannot leave containers behind - testcontainers' reaper
+// removes them even then.
 //
-//	make db-up && make test-integration && make db-down
+// Starting per server rather than as a stack means running one dialect's
+// subtest starts only that dialect's container; SQL Server, the slowest by
+// far, stays unstarted unless something asks for it.
 //
-// Without them the tests skip rather than fail. Each one talks to its server
-// through that server's own CLI client via `docker compose exec`, not through
-// a Go SQL driver, because the bulk scripts are written for those clients:
-// psql's \copy and mysql's LOAD DATA LOCAL INFILE are client features a
-// driver would never exercise.
+// Each test talks to its server through that server's own CLI client, not
+// through a Go SQL driver, because the bulk scripts are written for those
+// clients: psql's \copy and mysql's LOAD DATA LOCAL INFILE are client
+// features a driver would never exercise. testcontainers is here for the
+// lifecycle and for Exec/CopyFileToContainer, not for a connection string.
 package main
 
 import (
+	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"github.com/catdevman/mockagen/pkg/mockagen"
+	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const composeFile = "../../test/docker-compose.yml"
+// mssqlPassword has to satisfy SQL Server's complexity rules, and is used
+// both to start the server and to connect to it.
+const mssqlPassword = "Mockagen1!"
+
+// startupTimeout bounds how long a server gets to become usable. SQL Server
+// needs the most of the three and is comfortably inside this on a cold start.
+const startupTimeout = 3 * time.Minute
+
+// started holds the containers this run has booted, so each is started once
+// and TestMain can remove them all afterwards.
+var (
+	startedMu  sync.Mutex
+	started    = map[string]testcontainers.Container{}
+	startErrs  = map[string]error{}
+	noDockerMu sync.Once
+	noDocker   bool
+)
+
+// errNoDocker marks the one failure that should skip rather than fail: no
+// docker at all. Anything else that goes wrong starting a server is a real
+// error, since running with -tags=integration is opting in.
+var errNoDocker = errors.New("docker not installed")
+
+// container starts this target's server if it is not already running, and
+// returns the same one to every later caller.
+func (tg target) container(t *testing.T) testcontainers.Container {
+	t.Helper()
+	noDockerMu.Do(func() {
+		_, err := exec.LookPath("docker")
+		noDocker = err != nil
+	})
+	if noDocker {
+		t.Skip("docker not installed")
+	}
+
+	startedMu.Lock()
+	defer startedMu.Unlock()
+	if err, ok := startErrs[tg.dialect]; ok {
+		t.Fatal(err)
+	}
+	if c, ok := started[tg.dialect]; ok {
+		return c
+	}
+
+	opts := []testcontainers.ContainerCustomizer{
+		testcontainers.WithEnv(tg.image.env),
+		testcontainers.WithWaitStrategyAndDeadline(startupTimeout, tg.image.ready),
+	}
+	if len(tg.image.cmd) > 0 {
+		opts = append(opts, testcontainers.WithCmd(tg.image.cmd...))
+	}
+	c, err := testcontainers.Run(context.Background(), tg.image.ref, opts...)
+	if err != nil {
+		err = fmt.Errorf("starting %s (%s): %w", tg.dialect, tg.image.ref, err)
+		startErrs[tg.dialect] = err
+		t.Fatal(err)
+	}
+	started[tg.dialect] = c
+	return c
+}
+
+// TestMain removes the containers after the package's tests rather than after
+// each one, so a server is started at most once per run. os.Exit skips
+// deferred calls, hence the explicit teardown.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	startedMu.Lock()
+	for dialect, c := range started {
+		if err := c.Terminate(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "terminating %s: %v\n", dialect, err)
+		}
+	}
+	startedMu.Unlock()
+	os.Exit(code)
+}
+
+// serverImage is how one database server is started: the image, the
+// environment it needs, any command override, and how to tell it is usable.
+//
+// The readiness checks run the server's own client inside the container
+// rather than probing a port, because a listening socket is not the same as
+// an initialised database - every one of these images accepts a connection
+// before it will answer a query.
+type serverImage struct {
+	ref   string
+	env   map[string]string
+	cmd   []string
+	ready wait.Strategy
+}
 
 // containerBundleDir is where a generated bundle is copied inside the
 // container. The bulk scripts reference their CSV by bare name, so the client
@@ -76,12 +178,17 @@ func utf8Valid(s string) bool {
 
 // target describes one database server and how to drive it.
 type target struct {
-	dialect string // mockagen dialect name
-	service string // docker compose service
+	dialect string      // mockagen dialect name
+	image   serverImage // how to start its server
 
 	// client is the argv prefix that runs the server's CLI client against
 	// the mockagen database.
 	client []string
+	// env is set for every exec. mysql needs it: Exec is read back
+	// multiplexed, so stderr lands in the same stream as the query output,
+	// and passing the password with -p would mix a warning about doing
+	// exactly that into the rows. MYSQL_PWD avoids the warning entirely.
+	env []string
 	// initSQL runs before anything else, to create the database where the
 	// image does not make one.
 	initSQL []string
@@ -135,8 +242,16 @@ func utf16leHex(s string) string {
 func targets() []target {
 	return []target{
 		{
-			dialect:   "postgres",
-			service:   "postgres",
+			dialect: "postgres",
+			image: serverImage{
+				ref: "postgres:17-alpine",
+				env: map[string]string{
+					"POSTGRES_PASSWORD": "mockagen",
+					"POSTGRES_DB":       "mockagen",
+				},
+				ready: wait.ForExec([]string{"pg_isready", "-U", "postgres", "-d", "mockagen"}).
+					WithPollInterval(time.Second),
+			},
 			client:    []string{"psql", "-U", "postgres", "-d", "mockagen", "-v", "ON_ERROR_STOP=1", "-q", "-t", "-A"},
 			ddl:       "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id text NOT NULL, v text NOT NULL);",
 			fileFlag:  "-f",
@@ -146,13 +261,27 @@ func targets() []target {
 		},
 		{
 			dialect: "mysql",
-			service: "mysql",
+			image: serverImage{
+				ref: "mysql:8.4",
+				// local_infile is off by default on the server side, and LOAD
+				// DATA LOCAL INFILE needs it on both ends - the same flag the
+				// generated bulk script tells the user to pass to the client.
+				cmd: []string{"--local-infile=1"},
+				env: map[string]string{
+					"MYSQL_ROOT_PASSWORD": "mockagen",
+					"MYSQL_DATABASE":      "mockagen",
+				},
+				ready: wait.ForExec([]string{
+					"mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pmockagen", "--silent",
+				}).WithPollInterval(2 * time.Second),
+			},
 			// --default-character-set is not optional: mockagen writes UTF-8,
 			// and without it the client announces latin1 and the server
 			// silently stores the mojibake re-encoding of every non-ASCII
 			// value. --local-infile is what the generated bulk script asks
 			// for; it is harmless in insert mode.
-			client:    []string{"mysql", "--default-character-set=utf8mb4", "--local-infile=1", "-uroot", "-pmockagen", "-D", "mockagen", "-N", "-B"},
+			client:    []string{"mysql", "--default-character-set=utf8mb4", "--local-infile=1", "-uroot", "-D", "mockagen", "-N", "-B"},
+			env:       []string{"MYSQL_PWD=mockagen"},
 			ddl:       "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id text NOT NULL, v text NOT NULL);",
 			queryFlag: "-e",
 			selectHex: "SELECT CONCAT(id, ':', HEX(v)) FROM vals ORDER BY CAST(id AS SIGNED)",
@@ -160,7 +289,18 @@ func targets() []target {
 		},
 		{
 			dialect: "mssql",
-			service: "mssql",
+			image: serverImage{
+				ref: "mcr.microsoft.com/mssql/server:2022-latest",
+				env: map[string]string{
+					"ACCEPT_EULA":       "Y",
+					"MSSQL_SA_PASSWORD": mssqlPassword,
+					"MSSQL_PID":         "Developer",
+				},
+				ready: wait.ForExec([]string{
+					"/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa",
+					"-P", mssqlPassword, "-C", "-Q", "SELECT 1",
+				}).WithPollInterval(3 * time.Second),
+			},
 			// -C trusts the image's self-signed certificate, -b makes sqlcmd
 			// exit non-zero on a SQL error (it does not by default, so a
 			// failed load looked like a successful one), and -h -1 drops
@@ -172,7 +312,7 @@ func targets() []target {
 			// combined with -h, so the padding -W would have trimmed is
 			// trimmed in Go instead. 8000 is -y's maximum, which caps a test
 			// value at about 4000 characters.
-			client:        []string{"/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "Mockagen1!", "-C", "-b", "-d", "mockagen", "-h", "-1", "-w", "65535", "-y", "8000"},
+			client:        []string{"/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", mssqlPassword, "-C", "-b", "-d", "mockagen", "-h", "-1", "-w", "65535", "-y", "8000"},
 			initSQL:       []string{"IF DB_ID('mockagen') IS NULL CREATE DATABASE mockagen;"},
 			ddl:           "DROP TABLE IF EXISTS vals; CREATE TABLE vals (id nvarchar(50) NOT NULL, v nvarchar(max) NOT NULL);",
 			fileFlag:      "-i",
@@ -184,63 +324,30 @@ func targets() []target {
 	}
 }
 
-// compose runs a docker compose subcommand.
-func compose(args ...string) (string, error) {
-	cmd := exec.Command("docker", append([]string{"compose", "-f", composeFile}, args...)...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// requireServer skips the test unless the service is up and healthy.
-func (tg target) requireServer(t *testing.T) {
+// execIn runs argv inside the service, optionally with a working directory,
+// and returns its combined output.
+func (tg target) execIn(t *testing.T, workdir string, argv ...string) string {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not installed")
-	}
-	out, err := compose("ps", "--format", "{{.Service}} {{.Health}}")
-	if err != nil {
-		t.Skipf("docker compose unavailable: %v\n%s", err, out)
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == tg.service {
-			if fields[1] == "healthy" {
-				return
-			}
-			t.Skipf("service %s is %q, not healthy - run `make db-up`", tg.service, fields[1])
-		}
-	}
-	t.Skipf("service %s is not running - run `make db-up`", tg.service)
-}
-
-// execIn runs argv inside the service, optionally with a working directory
-// and with stdin wired to a local file.
-func (tg target) execIn(t *testing.T, workdir, stdinPath string, argv ...string) string {
-	t.Helper()
-	args := []string{"compose", "-f", composeFile, "exec", "-T"}
+	// Multiplexed de-frames docker's stream protocol into one reader; without
+	// it the output carries 8-byte headers between chunks.
+	opts := []tcexec.ProcessOption{tcexec.Multiplexed()}
 	if workdir != "" {
-		args = append(args, "-w", workdir)
+		opts = append(opts, tcexec.WithWorkingDir(workdir))
 	}
-	args = append(args, tg.service)
-	args = append(args, argv...)
+	if len(tg.env) > 0 {
+		opts = append(opts, tcexec.WithEnv(tg.env))
+	}
 
-	cmd := exec.Command("docker", args...)
-	if stdinPath != "" {
-		f, err := os.Open(stdinPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		cmd.Stdin = f
+	code, reader, err := tg.container(t).Exec(context.Background(), argv, opts...)
+	out, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		t.Fatalf("%s: reading output: %v", strings.Join(argv, " "), readErr)
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("%s: %v\nstderr: %s\nstdout: %s", strings.Join(argv, " "), err, stderr.String(), out)
+		t.Fatalf("%s: %v\n%s", strings.Join(argv, " "), err, out)
 	}
-	// mysql warns about the password on every invocation; it is not an error.
-	if s := stderr.String(); s != "" && !strings.Contains(s, "password on the command line") {
-		t.Logf("%s stderr: %s", tg.service, s)
+	if code != 0 {
+		t.Fatalf("%s: exit %d\n%s", strings.Join(argv, " "), code, out)
 	}
 	return string(out)
 }
@@ -248,7 +355,7 @@ func (tg target) execIn(t *testing.T, workdir, stdinPath string, argv ...string)
 // query runs one statement and returns stdout.
 func (tg target) query(t *testing.T, sql string) string {
 	t.Helper()
-	return tg.execIn(t, "", "", append(tg.client, tg.queryFlag, sql)...)
+	return tg.execIn(t, "", append(tg.client, tg.queryFlag, sql)...)
 }
 
 // runFile executes a file already copied into the container at
@@ -258,11 +365,11 @@ func (tg target) runFile(t *testing.T, name string) {
 	if tg.fileFlag == "" {
 		// No file flag: feed it on stdin, which is what the generated mysql
 		// script's own instructions do.
-		tg.execIn(t, containerBundleDir, "", "sh", "-c",
+		tg.execIn(t, containerBundleDir, "sh", "-c",
 			strings.Join(tg.client, " ")+" < "+name)
 		return
 	}
-	tg.execIn(t, containerBundleDir, "", append(tg.client, tg.fileFlag, name)...)
+	tg.execIn(t, containerBundleDir, append(tg.client, tg.fileFlag, name)...)
 }
 
 // setup creates the database and table, and an empty bundle directory.
@@ -279,19 +386,22 @@ func (tg target) setup(t *testing.T) {
 			}
 			client = append(client, tg.client[i])
 		}
-		tg.execIn(t, "", "", append(client, tg.queryFlag, sql)...)
+		tg.execIn(t, "", append(client, tg.queryFlag, sql)...)
 	}
 	tg.query(t, tg.ddl)
-	tg.execIn(t, "", "", "rm", "-rf", containerBundleDir)
-	tg.execIn(t, "", "", "mkdir", "-p", containerBundleDir)
+	tg.execIn(t, "", "rm", "-rf", containerBundleDir)
+	tg.execIn(t, "", "mkdir", "-p", containerBundleDir)
 }
 
 // copyIn copies a local file into the container's bundle directory.
 func (tg target) copyIn(t *testing.T, localPath string) {
 	t.Helper()
-	dest := fmt.Sprintf("%s:%s/%s", tg.service, containerBundleDir, filepath.Base(localPath))
-	if out, err := compose("cp", localPath, dest); err != nil {
-		t.Fatalf("cp %s: %v\n%s", localPath, err, out)
+	dest := containerBundleDir + "/" + filepath.Base(localPath)
+	// 0o644 so the mssql server process, which reads the CSV itself rather
+	// than through the client, can open it.
+	if err := tg.container(t).CopyFileToContainer(
+		context.Background(), localPath, dest, 0o644); err != nil {
+		t.Fatalf("copying %s to %s: %v", localPath, dest, err)
 	}
 }
 
@@ -370,7 +480,6 @@ func TestIntegrationInsert(t *testing.T) {
 	values := integrationValues()
 	for _, tg := range targets() {
 		t.Run(tg.dialect, func(t *testing.T) {
-			tg.requireServer(t)
 			tg.setup(t)
 
 			dir := writeRecords(t, mockagen.MockagenConfig{
@@ -392,7 +501,6 @@ func TestIntegrationInsert(t *testing.T) {
 func TestIntegrationBulk(t *testing.T) {
 	for _, tg := range targets() {
 		t.Run(tg.dialect, func(t *testing.T) {
-			tg.requireServer(t)
 			tg.setup(t)
 
 			values := integrationValues()
@@ -456,7 +564,6 @@ func TestIntegrationMSSQLUnicodePrefix(t *testing.T) {
 			tg = candidate
 		}
 	}
-	tg.requireServer(t)
 	tg.setup(t)
 
 	const value = "日本🎉"
@@ -489,7 +596,6 @@ func TestIntegrationMSSQLBulkNonASCII(t *testing.T) {
 			tg = candidate
 		}
 	}
-	tg.requireServer(t)
 	tg.setup(t)
 
 	const value = "日本語"

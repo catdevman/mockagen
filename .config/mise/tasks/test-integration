@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-#MISE description="Run the SQL integration tests against the containers (needs db-up)"
+#MISE description="Run the SQL integration tests (starts and removes its own servers)"
 set -euo pipefail
 go test -tags=integration -count=1 -v -timeout=10m ./cmd/mockagen -run Integration

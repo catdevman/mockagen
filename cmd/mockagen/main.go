@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"maps"
+	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -12,79 +14,240 @@ import (
 	"unicode"
 
 	"github.com/catdevman/mockagen/pkg/mockagen"
-	"github.com/catdevman/mockagen/pkg/mockagen/provider"
+	"github.com/catdevman/mockagen/pkg/mockagen/types"
 	"github.com/go-faker/faker/v4"
 )
 
-var configFile string
+var (
+	// version, commit, and date are injected at build time by .goreleaser.yaml
+	// via ldflags. When compiled directly without ldflags, default placeholders
+	// keep mockagen version informative in local and development builds.
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 
-// mapToFaker maps Mockaroo schema type names to go-faker struct tags.
-// Only faker tags that resolve to a plain string are safe here: every
-// generated struct field is typed as Go string (see generateFakes)
-var mapToFaker = map[string]string{
-	"GUID":                 "uuid_hyphenated",
-	"First Name":           "first_name",
-	"Last Name":            "last_name",
-	"Full Name":            "name",
-	"Email Address":        "email",
-	"Gender":               "oneof: male,female",
-	"Datetime":             "date",
-	"Custom List":          "oneof:",
-	"Username":             "username",
-	"URL":                  "url",
-	"Domain Name":          "domain_name",
-	"IP Address":           "ipv4",
-	"IPv6 Address":         "ipv6",
-	"MAC Address":          "mac_address",
-	"Phone":                "phone_number",
-	"Toll-Free Phone":      "toll_free_number",
-	"Phone (E.164)":        "e_164_phone_number",
-	"Credit Card Number":   "cc_number",
-	"Credit Card Type":     "cc_type",
-	"Currency Code":        "currency",
-	"Amount with Currency": "amount_with_currency",
-	"Time":                 "time",
-	"Day of Week":          "day_of_week",
-	"Day of Month":         "day_of_month",
-	"Month":                "month_name",
-	"Year":                 "year",
-	"Century":              "century",
-	"Time Zone":            "timezone",
-	"Time Period":          "time_period",
-	"Word":                 "word",
-	"Sentence":             "sentence",
-	"Paragraph":            "paragraph",
-	"Title (Male)":         "title_male",
-	"Title (Female)":       "title_female",
-}
+	configFile string
+	// outputFile holds the destination file path given by -output. Kept at
+	// package level alongside configFile so the flag parser can bind it
+	// directly before subcommand dispatch lands.
+	outputFile string
+)
 
-// mockagen-specific types that go-faker has no built-in generator for
-// (registered via faker.AddProvider in pkg/mockagen/provider's init).
-func init() {
-	maps.Copy(mapToFaker, provider.TypeMap)
-}
+// validSubcommands enumerates the supported first-class verbs. An unknown
+// verb not prefixed with a '-' flag marker is rejected naming these options.
+var validSubcommands = []string{"gen", "schema", "map", "import", "version", "help"}
+
+// mapToFaker mirrors types.FakerTags() so generation routines and test guards
+// retain direct map access while pkg/mockagen/types serves as the single
+// source of truth for generator type definitions and SQL affinities.
+var mapToFaker = types.FakerTags()
 
 func main() {
-	// Need arguments:
-	flag.StringVar(&configFile, "config", "", "")
-	flag.Parse()
-	// Check if config is legit
-	config := mockagen.LoadConfig(configFile)
-	outputFile := fmt.Sprintf("./output/%s.%s", strings.ReplaceAll(config.Name, " ", "-"), outputExt(config.FileFormat))
+	if code := runCLI(os.Args[1:], os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runCLI parses arguments and dispatches to subcommands or the legacy flag
+// fallback. Extracted from main so dispatch, usage messages and exit codes can
+// be tested in-process without spawning subprocesses.
+func runCLI(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printUsage(stderr)
+		return 1
+	}
+
+	subcmd := args[0]
+	switch subcmd {
+	case "gen":
+		genFs := flag.NewFlagSet("gen", flag.ContinueOnError)
+		genFs.SetOutput(stderr)
+		var cfg, out string
+		genFs.StringVar(&cfg, "config", "", "path to schema configuration file")
+		genFs.StringVar(&out, "output", "", "path to output file")
+		if err := genFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		if cfg == "" {
+			fmt.Fprintln(stderr, "mockagen gen: -config is required")
+			printUsage(stderr)
+			return 1
+		}
+		return runGenerate(cfg, out, stderr)
+
+	case "schema":
+		schemaFs := flag.NewFlagSet("schema", flag.ContinueOnError)
+		schemaFs.SetOutput(stderr)
+		if err := schemaFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		fmt.Fprintln(stderr, "mockagen: schema command not yet implemented")
+		return 1
+
+	case "map":
+		mapFs := flag.NewFlagSet("map", flag.ContinueOnError)
+		mapFs.SetOutput(stderr)
+		if err := mapFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		fmt.Fprintln(stderr, "mockagen: map command not yet implemented")
+		return 1
+
+	case "import":
+		importFs := flag.NewFlagSet("import", flag.ContinueOnError)
+		importFs.SetOutput(stderr)
+		if err := importFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		fmt.Fprintln(stderr, "mockagen: import command not yet implemented")
+		return 1
+
+	case "version":
+		versionFs := flag.NewFlagSet("version", flag.ContinueOnError)
+		versionFs.SetOutput(stderr)
+		if err := versionFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		printVersion(stdout)
+		return 0
+
+	case "help":
+		helpFs := flag.NewFlagSet("help", flag.ContinueOnError)
+		helpFs.SetOutput(stderr)
+		if err := helpFs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		printUsage(stdout)
+		return 0
+
+	default:
+		if strings.HasPrefix(subcmd, "-") {
+			legacyFs := flag.NewFlagSet("mockagen", flag.ContinueOnError)
+			legacyFs.SetOutput(stderr)
+			var cfg, out string
+			var showVer bool
+			legacyFs.StringVar(&cfg, "config", "", "path to schema configuration file")
+			legacyFs.StringVar(&out, "output", "", "path to output file")
+			legacyFs.BoolVar(&showVer, "version", false, "print version information")
+			if err := legacyFs.Parse(args); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					printUsage(stdout)
+					return 0
+				}
+				return 2
+			}
+			if showVer {
+				printVersion(stdout)
+				return 0
+			}
+			if cfg == "" {
+				printUsage(stderr)
+				return 1
+			}
+			return runGenerate(cfg, out, stderr)
+		}
+
+		fmt.Fprintf(stderr, "mockagen: unknown subcommand %q. Valid subcommands: %s\n\n",
+			subcmd, strings.Join(validSubcommands, ", "))
+		printUsage(stderr)
+		return 1
+	}
+}
+
+// runGenerate executes fake data generation and writes records to outPath.
+// Centralised so gen subcommand and legacy flag dispatch share the exact same
+// generation logic and error reporting.
+func runGenerate(cfgPath, outPath string, errOutput io.Writer) int {
+	config, err := mockagen.Load(cfgPath)
+	if err != nil {
+		fmt.Fprintln(errOutput, "mockagen:", err)
+		return 1
+	}
+	out := outputPath(config, outPath)
+	if err := ensureOutputDir(out); err != nil {
+		fmt.Fprintln(errOutput, "mockagen:", err)
+		return 1
+	}
 
 	fakesCh, structArr := generateFakes(config)
-	w, err := newRecordWriter(config, structArr, outputFile)
+	w, err := newRecordWriter(config, structArr, out)
 	if err != nil {
-		fatal(err)
+		fmt.Fprintln(errOutput, "mockagen:", err)
+		return 1
 	}
 	for fake := range fakesCh {
 		if err := w.WriteRecord(fake); err != nil {
-			fatal(err)
+			fmt.Fprintln(errOutput, "mockagen:", err)
+			return 1
 		}
 	}
 	if err := w.Close(); err != nil {
-		fatal(err)
+		fmt.Fprintln(errOutput, "mockagen:", err)
+		return 1
 	}
+	return 0
+}
+
+// printVersion writes version, commit and build date metadata to w.
+// .goreleaser.yaml injects all three ldflags during releases.
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "mockagen version %s (commit: %s, date: %s)\n", version, commit, date)
+}
+
+// printUsage outputs the list of available commands and general synopsis to w.
+// Shared across bare invocations, the help subcommand, and CLI parse errors.
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: mockagen <command> [flags]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  gen      generate fake data from a schema config")
+	fmt.Fprintln(w, "  schema   introspect a database table and write a schema file")
+	fmt.Fprintln(w, "  map      map source fields to target schema columns")
+	fmt.Fprintln(w, "  import   import source data using a field map")
+	fmt.Fprintln(w, "  version  print version and build metadata")
+	fmt.Fprintln(w, "  help     show command usage")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Run 'mockagen <command> -help' for command-specific flags.")
+}
+
+// outputPath selects the destination for generated records: an explicit
+// destination overrides the historical convention of placing files under
+// ./output/ with spaces converted to dashes.
+func outputPath(config mockagen.MockagenConfig, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	name := strings.ReplaceAll(config.Name, " ", "-")
+	return fmt.Sprintf("./output/%s.%s", name, outputExt(config.FileFormat))
+}
+
+// ensureOutputDir ensures the parent directory of path exists before a writer
+// attempts to create the output file. Writing fails outright on os.Create if
+// the target directory has not been created beforehand.
+func ensureOutputDir(path string) error {
+	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	return os.MkdirAll(dir, 0o755)
 }
 
 // fatal reports a failure the user can act on - an unusable config value, an

@@ -10,11 +10,9 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/catdevman/mockagen/pkg/mockagen"
+	"github.com/catdevman/mockagen/pkg/mockagen/sqlgen"
 	fixed "github.com/ianlopshire/go-fixedwidth"
 	"github.com/parquet-go/parquet-go"
 	yaml "gopkg.in/yaml.v3"
@@ -483,185 +482,21 @@ func (w *parquetWriter) Close() error {
 }
 
 // maxRowsPerStatement bounds how many row tuples go into a single INSERT.
-// SQL Server rejects a table value constructor holding more than 1000 rows
-// ("the number of row value expressions in the INSERT statement exceeds the
-// maximum allowed number of 1000 row values"), the lowest hard cap of the
-// four dialects. The others cap a statement by size rather than row count -
-// MySQL's max_allowed_packet, Postgres' 1GB message limit - and 1000 rows of
-// generated data stays well inside both, so one limit serves all of them.
-const maxRowsPerStatement = 1000
+// maxRowsPerStatement is re-exported from sqlgen for backwards compatibility
+// with existing write buffer calculations.
+const maxRowsPerStatement = sqlgen.MaxRowsPerStatement
 
-// sqlDialect describes the handful of places the four supported databases
-// disagree about how an INSERT is spelled. The statement shape itself -
-// INSERT INTO t (cols) VALUES (...),(...); - is common to all of them.
-type sqlDialect struct {
-	name string
-	// identOpen/identClose bracket a quoted identifier. All four dialects
-	// escape a literal identClose inside the identifier by doubling it.
-	// Identifiers are always quoted, so a column named "order" or "select"
-	// needs no special handling - and the generator cannot produce one that
-	// would break out of the quotes.
-	identOpen, identClose byte
-	// escapeBackslash says backslash is an escape character inside a string
-	// literal, which MySQL alone treats it as by default (NO_BACKSLASH_ESCAPES
-	// off). That means a lone backslash would swallow the character after it,
-	// so each is doubled - and it also means CR and LF can be written as the
-	// escapes \r and \n rather than as raw bytes. The other three take
-	// backslash literally, where doubling would insert two and \r would read
-	// as the letter r.
-	escapeBackslash bool
-	// unicodePrefix is written before a literal containing non-ASCII text.
-	// SQL Server needs N'...' to make it an nvarchar literal - an unprefixed
-	// one is varchar, and anything outside the server's code page is replaced
-	// with "?" on the way in. The other three store the file's UTF-8 as-is.
-	unicodePrefix string
-}
+// sqlDialect aliases sqlgen.Dialect so existing writer definitions remain
+// unchanged while sqlgen serves as the single authority on database dialects.
+type sqlDialect = sqlgen.Dialect
 
-var sqlDialects = map[string]sqlDialect{
-	"postgres": {name: "postgres", identOpen: '"', identClose: '"'},
-	"sqlite":   {name: "sqlite", identOpen: '"', identClose: '"'},
-	"mysql":    {name: "mysql", identOpen: '`', identClose: '`', escapeBackslash: true},
-	"mssql":    {name: "mssql", identOpen: '[', identClose: ']', unicodePrefix: "N"},
-}
-
-// sqlDialectAliases maps the other names these databases go by onto the
-// canonical keys of sqlDialects, so a config saying "postgresql" or
-// "sqlserver" works without the user having to guess our spelling.
-var sqlDialectAliases = map[string]string{
-	"postgresql": "postgres",
-	"pgsql":      "postgres",
-	"pg":         "postgres",
-	"sqlite3":    "sqlite",
-	"mariadb":    "mysql",
-	"sqlserver":  "mssql",
-	"tsql":       "mssql",
-}
-
-// defaultSQLDialect is what an empty dialect field means. Postgres' spelling
-// is the standard one - double-quoted identifiers, no backslash escapes - so
-// its output is also the most portable of the four.
-const defaultSQLDialect = "postgres"
-
-// lookupSQLDialect resolves a config's dialect field. An unrecognised name is
-// an error rather than a fallback: silently writing a different dialect's
-// escaping would produce a file that only fails later, inside the database.
-func lookupSQLDialect(name string) (sqlDialect, error) {
-	key := strings.ToLower(strings.TrimSpace(name))
-	if key == "" {
-		key = defaultSQLDialect
-	}
-	if canonical, ok := sqlDialectAliases[key]; ok {
-		key = canonical
-	}
-	d, ok := sqlDialects[key]
-	if !ok {
-		valid := slices.Sorted(maps.Keys(sqlDialects))
-		return sqlDialect{}, fmt.Errorf("unsupported sql dialect %q: want one of %s", name, strings.Join(valid, ", "))
-	}
-	return d, nil
-}
-
-// appendIdent appends ident as a quoted identifier.
-func (d sqlDialect) appendIdent(dst []byte, ident string) []byte {
-	dst = append(dst, d.identOpen)
-	for i := 0; i < len(ident); i++ {
-		c := ident[i]
-		if c == d.identClose {
-			dst = append(dst, c)
-		}
-		dst = append(dst, c)
-	}
-	return append(dst, d.identClose)
-}
-
-// appendQualifiedIdent appends a possibly schema-qualified table name,
-// quoting each dotted part separately. Quoting "dbo.users" whole would name a
-// single table whose name contains a dot, which is not what anyone writing
-// that means.
-func (d sqlDialect) appendQualifiedIdent(dst []byte, name string) []byte {
-	for i, part := range strings.Split(name, ".") {
-		if i > 0 {
-			dst = append(dst, '.')
-		}
-		dst = d.appendIdent(dst, part)
-	}
-	return dst
-}
-
-// appendString appends s as a string literal that reads back as exactly s.
-//
-// The loop is bytewise rather than over runes because every byte of a
-// multi-byte UTF-8 sequence has its high bit set, and so can never equal one
-// of the ASCII bytes being escaped - the non-ASCII bytes simply pass through.
-//
-// A CR or LF is written as an escape where the dialect supports one; see the
-// case below for why that is not cosmetic.
-//
-// NUL is dropped. No dialect here can carry one in a literal: Postgres
-// rejects it in text outright, SQLite's own quoting truncates at it, and only
-// MySQL's \0 escape would survive - so there is no byte sequence that means
-// "a NUL" in all four, and dropping it keeps every file loadable.
-func (d sqlDialect) appendString(dst []byte, s string) []byte {
-	if d.unicodePrefix != "" && !isASCII(s) {
-		dst = append(dst, d.unicodePrefix...)
-	}
-	dst = append(dst, '\'')
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
-		case '\'':
-			// Doubling is valid in all four; MySQL's \' alternative is not.
-			dst = append(dst, '\'', '\'')
-		case '\\':
-			if d.escapeBackslash {
-				dst = append(dst, '\\')
-			}
-			dst = append(dst, '\\')
-		case '\r', '\n':
-			// Only where backslash escapes are available. A raw CR is the
-			// problem case: the mysql client strips it from the end of an
-			// input line so it tolerates CRLF-terminated scripts, and does
-			// so even inside a quoted literal, which silently turns a
-			// generated CRLF into a bare LF. Escaping both keeps every
-			// literal on one line and immune to any line-based handling.
-			if !d.escapeBackslash {
-				dst = append(dst, c)
-				break
-			}
-			if c == '\r' {
-				dst = append(dst, '\\', 'r')
-			} else {
-				dst = append(dst, '\\', 'n')
-			}
-		case 0:
-		default:
-			dst = append(dst, c)
-		}
-	}
-	return append(dst, '\'')
-}
-
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
+// lookupSQLDialect proxies sqlgen.Lookup for writer construction.
+var lookupSQLDialect = sqlgen.Lookup
 
 // sqlTable picks the table the "sql" format inserts into: config.Table when
-// set, otherwise one derived from the config name. The derived form joins the
-// name's words with underscores, since an unquoted "web logs" would have to
-// be written as a quoted identifier forever after.
+// set, otherwise one derived from the config name.
 func sqlTable(config mockagen.MockagenConfig) string {
-	if table := strings.TrimSpace(config.Table); table != "" {
-		return table
-	}
-	name := strings.ToLower(strings.Join(strings.Fields(config.Name), "_"))
-	if name == "" {
-		return "mockagen"
-	}
-	return name
+	return sqlgen.Table(config.Name, config.Table)
 }
 
 // sqlColumnName is the column a struct field is inserted into: its `sql` tag
@@ -699,13 +534,13 @@ type sqlWriter struct {
 func newSQLWriter(f *os.File, d sqlDialect, table string, structArr []reflect.StructField) *sqlWriter {
 	w := &sqlWriter{f: f, w: bufio.NewWriter(f), d: d, numCols: len(structArr)}
 	w.prefix = append(w.prefix, "INSERT INTO "...)
-	w.prefix = d.appendQualifiedIdent(w.prefix, table)
+	w.prefix = d.AppendQualifiedIdent(w.prefix, table)
 	w.prefix = append(w.prefix, " ("...)
 	for i, field := range structArr {
 		if i > 0 {
 			w.prefix = append(w.prefix, ", "...)
 		}
-		w.prefix = d.appendIdent(w.prefix, sqlColumnName(field))
+		w.prefix = d.AppendIdent(w.prefix, sqlColumnName(field))
 	}
 	w.prefix = append(w.prefix, ") VALUES"...)
 	return w
@@ -744,9 +579,9 @@ func (w *sqlWriter) WriteRecord(rec any) error {
 		}
 		field := v.Field(i)
 		if field.Kind() == reflect.String {
-			w.buf = w.d.appendString(w.buf, field.String())
+			w.buf = w.d.AppendString(w.buf, field.String())
 		} else {
-			w.buf = w.d.appendString(w.buf, fmt.Sprint(field.Interface()))
+			w.buf = w.d.AppendString(w.buf, fmt.Sprint(field.Interface()))
 		}
 	}
 	w.buf = append(w.buf, ')')
@@ -963,18 +798,6 @@ func lookupSQLMode(name string) (sqlMode, error) {
 	return 0, fmt.Errorf("unsupported sql mode %q: want insert or bulk", name)
 }
 
-// identList renders cols as a quoted, comma-separated column list.
-func (d sqlDialect) identList(cols []string) string {
-	var b []byte
-	for i, col := range cols {
-		if i > 0 {
-			b = append(b, ", "...)
-		}
-		b = d.appendIdent(b, col)
-	}
-	return string(b)
-}
-
 // sqlBulkWriter writes the records as CSV and, on Close, a script that loads
 // that CSV into the target table.
 //
@@ -999,7 +822,7 @@ func newSQLBulkWriter(outputFile string, d sqlDialect, table string, structArr [
 	// every row into the wrong place. The qualified form stays legal in
 	// insert mode, where it addresses an ATTACHed database as sqlite
 	// intends, so only this path has to refuse it.
-	if d.name == "sqlite" && strings.Contains(table, ".") {
+	if d.Name == "sqlite" && strings.Contains(table, ".") {
 		return nil, fmt.Errorf("sql dialect sqlite with mode bulk cannot load into qualified table %q: "+
 			"sqlite's .import would create a table of that literal name - use the bare table name", table)
 	}
@@ -1035,120 +858,5 @@ func (w *sqlBulkWriter) Close() error {
 	return os.WriteFile(w.scriptPath, w.script, 0o644)
 }
 
-// bulkLoadScript renders the dialect's bulk-load command for csvName, which
-// is a bare file name resolved relative to wherever the script is run.
-//
-// The four differ in more than syntax, and the comments in each generated
-// script say so, because the differences decide whether the command works at
-// all: postgres and mysql are given their client-side forms (\copy, LOAD DATA
-// LOCAL INFILE) since only those resolve a relative path against the CWD of
-// the process running the script; mssql's BULK INSERT has no client-side form
-// at all and reads the path on the server; and sqlite's .import is a CLI
-// dot-command rather than SQL.
-//
-// Null handling is deliberately left off. Each dialect can turn empty fields
-// into NULL (postgres' NULL ”, mysql's NULLIF), but only for every column at
-// once - which would silently rewrite a legitimately empty text value - so
-// the scripts carry it as a comment instead.
-// bulkScriptPreamble opens every dialect's script: what it loads, and that
-// the script and its CSV are a movable pair. Data is rarely generated on the
-// database host, so the two files are written to be zipped up and unpacked
-// together wherever the load actually runs - which is why the command inside
-// names the CSV by bare name rather than by any path from this machine.
-func bulkScriptPreamble(b *strings.Builder, quotedTable, csvName string) {
-	fmt.Fprintf(b, "-- Bulk load for %s, generated by mockagen.\n", quotedTable)
-	fmt.Fprintf(b, "-- This script and %s are a pair: keep them in the same directory - zip\n", csvName)
-	b.WriteString("-- them together to move them to the database host - and run this from there.\n--\n")
-}
-
-func bulkLoadScript(d sqlDialect, table string, cols []string, csvName string, includeHeader bool) []byte {
-	var b strings.Builder
-	quotedTable := string(d.appendQualifiedIdent(nil, table))
-	colList := d.identList(cols)
-
-	switch d.name {
-	case "postgres":
-		bulkScriptPreamble(&b, quotedTable, csvName)
-		b.WriteString("-- Run with:\n--   psql -d <database> -f <this file>\n--\n")
-		b.WriteString("-- \\copy is a psql client-side meta-command: it reads the file on the\n")
-		b.WriteString("-- machine running psql, relative to that process's working directory, and\n")
-		b.WriteString("-- has to stay on a single line. The server-side COPY is faster but needs an\n")
-		b.WriteString("-- absolute path the database server itself can see, plus pg_read_server_files.\n--\n")
-		b.WriteString("-- To load empty fields as NULL rather than empty strings, add NULL '' to the\n")
-		b.WriteString("-- WITH list below. It applies to every column, so it is left off here.\n")
-		header := ""
-		if includeHeader {
-			header = ", HEADER"
-		}
-		fmt.Fprintf(&b, "\\copy %s (%s) FROM '%s' WITH (FORMAT csv%s)\n", quotedTable, colList, csvName, header)
-
-	case "mysql":
-		bulkScriptPreamble(&b, quotedTable, csvName)
-		b.WriteString("-- Run with:\n--   mysql --local-infile=1 -D <database> < <this file>\n--\n")
-		b.WriteString("-- LOCAL reads the file on the client, relative to its working directory, and\n")
-		b.WriteString("-- needs local_infile enabled on both client and server. Dropping LOCAL makes\n")
-		b.WriteString("-- the server read the path instead, which secure_file_priv usually restricts.\n--\n")
-		b.WriteString("-- To load empty fields as NULL, read the columns into variables and SET each\n")
-		b.WriteString("-- one to NULLIF(@col, '') in place of the plain column list below.\n")
-		fmt.Fprintf(&b, "LOAD DATA LOCAL INFILE '%s' INTO TABLE %s\n", csvName, quotedTable)
-		// ESCAPED BY '' is not optional. LOAD DATA defaults to treating
-		// backslash as an escape character, so a backslash in the data -
-		// which the CSV carries literally, RFC 4180 having no escape
-		// character but the doubled quote - would be swallowed along with
-		// whatever followed it. Caught by TestIntegrationBulk, where "\\."
-		// arrived as ".".
-		b.WriteString("\tFIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY ''\n")
-		b.WriteString("\tLINES TERMINATED BY '\\n'\n")
-		if includeHeader {
-			b.WriteString("\tIGNORE 1 LINES\n")
-		}
-		fmt.Fprintf(&b, "\t(%s);\n", colList)
-
-	case "mssql":
-		bulkScriptPreamble(&b, quotedTable, csvName)
-		b.WriteString("-- Run with:\n--   sqlcmd -d <database> -i <this file>\n--\n")
-		fmt.Fprintf(&b, "-- WARNING: BULK INSERT is executed by the SQL Server process, so '%s' is\n", csvName)
-		b.WriteString("-- resolved on the SERVER - and relative to that process's working directory,\n")
-		b.WriteString("-- not the one you run sqlcmd from. Having unpacked this pair on the server,\n")
-		b.WriteString("-- substitute the absolute path of the directory holding them. To load from\n")
-		b.WriteString("-- the client instead, bcp does resolve a relative name against your own\n")
-		b.WriteString("-- working directory:\n")
-		fmt.Fprintf(&b, "--   bcp %s in %s -c -t, -S <server> -d <database> -T\n--\n", quotedTable, csvName)
-		b.WriteString("-- BULK INSERT takes no column list: it maps CSV fields to table columns by\n")
-		b.WriteString("-- POSITION, so the table's column order must match the CSV's, which is:\n")
-		fmt.Fprintf(&b, "--   %s\n--\n", strings.Join(cols, ", "))
-		b.WriteString("-- FORMAT = 'CSV' needs SQL Server 2017 or later.\n--\n")
-		b.WriteString("-- NON-ASCII DATA: the CSV is UTF-8, and BULK INSERT otherwise reads it in\n")
-		b.WriteString("-- the server's default codepage, silently storing mojibake. On Windows,\n")
-		b.WriteString("-- add CODEPAGE = '65001' to the WITH list to fix that. On SQL Server for\n")
-		b.WriteString("-- Linux that option is rejected outright (\"Keyword or statement option\n")
-		b.WriteString("-- 'CODEPAGE' is not supported on the 'Linux' platform\"), and neither a\n")
-		b.WriteString("-- UTF-8 collation on the target column nor DATAFILETYPE helps - the\n")
-		b.WriteString("-- latter cannot be combined with FORMAT = 'CSV' at all. If your data has\n")
-		b.WriteString("-- non-ASCII values and your server runs on Linux, use mode: insert\n")
-		b.WriteString("-- instead: its N'' literals carry unicode correctly.\n--\n")
-		b.WriteString("-- One quirk to know: BULK INSERT loads an empty field as NULL rather than\n")
-		b.WriteString("-- as an empty string when the target column is nullable, even though the\n")
-		b.WriteString("-- CSV quotes it. Declare the column NOT NULL if you need '' preserved.\n")
-		fmt.Fprintf(&b, "BULK INSERT %s\n\tFROM '%s'\n", quotedTable, csvName)
-		firstRow := 1
-		if includeHeader {
-			firstRow = 2
-		}
-		fmt.Fprintf(&b, "\tWITH (FORMAT = 'CSV', FIRSTROW = %d, FIELDTERMINATOR = ',', ROWTERMINATOR = '0x0a', FIELDQUOTE = '\"');\n", firstRow)
-
-	case "sqlite":
-		bulkScriptPreamble(&b, quotedTable, csvName)
-		b.WriteString("-- These are sqlite3 CLI dot-commands, not SQL. Run with:\n")
-		b.WriteString("--   sqlite3 <database file> < <this file>\n--\n")
-		b.WriteString("-- .import appends to the table when it exists, and creates it from the CSV\n")
-		b.WriteString("-- otherwise - every column typed TEXT. --skip needs sqlite3 3.32 or later.\n")
-		b.WriteString(".mode csv\n")
-		skip := ""
-		if includeHeader {
-			skip = "--skip 1 "
-		}
-		fmt.Fprintf(&b, ".import %s%s %s\n", skip, csvName, table)
-	}
-	return []byte(b.String())
-}
+// bulkLoadScript proxies sqlgen.BulkLoadScript.
+var bulkLoadScript = sqlgen.BulkLoadScript
