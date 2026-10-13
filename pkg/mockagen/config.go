@@ -32,9 +32,12 @@ type MockagenConfig struct {
 	Columns []MockagenColumn `yaml:"columns" json:"columns" toml:"columns"`
 }
 
-// MockagenColumn -
+// MockagenColumn specifies how values for an individual column are generated.
 type MockagenColumn struct {
-	Name           string   `yaml:"name" json:"name" toml:"name"`
+	Name string `yaml:"name" json:"name" toml:"name"`
+	// Comment carries warnings or notes about constraints the generator
+	// cannot guarantee (such as foreign key or unique constraints).
+	Comment        string   `yaml:"comment,omitempty" json:"comment,omitempty" toml:"comment,omitempty"`
 	NullPercentage int64    `yaml:"null_percentage" json:"null_percentage" toml:"null_percentage"`
 	Type           string   `yaml:"type" json:"type" toml:"type"`
 	Formula        string   `yaml:"formula" json:"formula" toml:"formula"`

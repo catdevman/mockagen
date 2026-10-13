@@ -2,7 +2,7 @@
 #MISE description="Check formatting and run go vet, including the integration build tag"
 set -euo pipefail
 
-unformatted=$(gofmt -l ./cmd ./pkg ./scripts)
+unformatted=$(gofmt -l ./cmd ./pkg ./scripts ./internal)
 if [ -n "$unformatted" ]; then
   echo "gofmt needed:"
   echo "$unformatted"

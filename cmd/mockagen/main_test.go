@@ -189,16 +189,26 @@ func TestBuildMetadataVariables(t *testing.T) {
 // TestCLISubcommandDispatch tests the CLI router across all subcommands, legacy
 // flags, and error conditions without requiring external processes.
 func TestCLISubcommandDispatch(t *testing.T) {
-	sampleCfg := "../../test_data/config/Mockadoo.schema.yaml"
-
-	// Create a temp .yml file to verify .yml works via CLI
-	ymlPath := filepath.Join(t.TempDir(), "config.yml")
-	yamlContent, err := os.ReadFile(sampleCfg)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if err := os.WriteFile(ymlPath, yamlContent, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// Written fresh rather than pointing at test_data: the sample schemas
+	// there ask for a million rows, and the five gen cases below generated
+	// them once each, which was 21 of the unit suite's 22 seconds. These
+	// cases exercise argument routing, so two rows prove as much as a
+	// million. The same bytes are written twice to cover the .yml extension,
+	// which LoadConfig accepts as of the kind loader.
+	const genConfig = `num_rows: 2
+file_format: yaml
+name: dispatch
+columns:
+  - name: id
+    type: GUID
+`
+	dir := t.TempDir()
+	sampleCfg := filepath.Join(dir, "config.yaml")
+	ymlPath := filepath.Join(dir, "config.yml")
+	for _, p := range []string{sampleCfg, ymlPath} {
+		if err := os.WriteFile(p, []byte(genConfig), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", p, err)
+		}
 	}
 
 	cases := []struct {
