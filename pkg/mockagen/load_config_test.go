@@ -473,3 +473,52 @@ columns:
 		t.Errorf("error %q should mention type name NonExistentGeneratorType", errMsg)
 	}
 }
+
+// TestLoadConfig_CustomListRequiresValues pins that a type needing a value
+// list is rejected at load. Letting it through produces a bare "oneof:" faker
+// tag, which faker refuses and generateFakes turns into a panic from a
+// worker goroutine - a stack trace where every other bad config value prints
+// "mockagen: ...".
+func TestLoadConfig_CustomListRequiresValues(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantErr error
+	}{
+		{
+			name: "Custom List with no values is rejected",
+			yaml: "num_rows: 1\nfile_format: json\nname: t\n" +
+				"columns:\n  - name: status\n    type: Custom List\n",
+			wantErr: ErrMissingValues,
+		},
+		{
+			name: "Custom List with values loads",
+			yaml: "num_rows: 1\nfile_format: json\nname: t\n" +
+				"columns:\n  - name: status\n    type: Custom List\n" +
+				"    values: [a, b]\n",
+		},
+		{
+			name: "a type needing no values is unaffected",
+			yaml: "num_rows: 1\nfile_format: json\nname: t\n" +
+				"columns:\n  - name: id\n    type: GUID\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "c.yaml")
+			if err := os.WriteFile(p, []byte(tc.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(p)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Load() error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+		})
+	}
+}

@@ -258,14 +258,11 @@ func TestIntegrationMSSQLBulkNonASCII(t *testing.T) {
 	}
 }
 
-// TestIntegrationDSN verifies that containerized targets expose valid mapped
-// ports and construct non-empty DSNs that include the assigned port, while
-// TestIntegrationDSN checks that the DSNs the harness hands out are well
-// formed, not merely non-empty. The earlier version asserted only that the
-// string contained the mapped port, which a DSN with the wrong scheme, a
-// missing database or the port in the wrong place passes just as happily -
-// and introspection, the first thing in this repo that actually dials one,
-// is where that would have surfaced.
+// TestIntegrationDSN checks that each target's DSN is well formed, not merely
+// that it mentions the mapped port: a DSN with the wrong scheme, the wrong
+// user or no database name contains the port just as happily, and
+// introspection - the first thing here that actually dials one - is where
+// that would surface.
 func TestIntegrationDSN(t *testing.T) {
 	for _, tg := range dbtest.Targets() {
 		t.Run(tg.Dialect, func(t *testing.T) {

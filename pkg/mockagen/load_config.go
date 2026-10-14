@@ -30,6 +30,12 @@ var (
 	// ErrUnknownColumnType indicates a column specifies a generator type
 	// not registered in the types catalog.
 	ErrUnknownColumnType = errors.New("unknown column type")
+
+	// ErrMissingValues reports a column whose type needs a value list and
+	// has none. Rejected at load because the alternative is a panic from a
+	// generation worker: the faker tag becomes a bare "oneof:", which faker
+	// refuses, and generateFakes turns a faker error into a panic.
+	ErrMissingValues = errors.New("column type requires values")
 )
 
 // envelope captures the metadata envelope on configuration files without
@@ -98,7 +104,18 @@ func Load(p string) (MockagenConfig, error) {
 	// Guard against unrecognised generator types which would otherwise
 	// silently degrade to random string generation.
 	for _, col := range cfg.Columns {
-		if _, ok := types.Lookup(col.Type); !ok {
+		t, ok := types.Lookup(col.Type)
+		if ok && t.RequiresValues && len(col.Values) == 0 {
+			// Caught here rather than at generation: a "Custom List" with no
+			// values builds the faker tag "oneof:" with no arguments, faker
+			// rejects it, and generateFakes panics inside a worker - so the
+			// user would get a stack trace where this CLI prints
+			// "mockagen: ..." for every other bad config value.
+			return MockagenConfig{}, fmt.Errorf(
+				"%w: column %q has type %q but no values",
+				ErrMissingValues, col.Name, col.Type)
+		}
+		if !ok {
 			return MockagenConfig{}, fmt.Errorf("%w: column %q has unknown type %q",
 				ErrUnknownColumnType, col.Name, col.Type)
 		}

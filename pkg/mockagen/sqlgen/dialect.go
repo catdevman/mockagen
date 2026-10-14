@@ -15,8 +15,13 @@ import (
 )
 
 // MaxRowsPerStatement caps the number of rows batched into a single multi-row
-// INSERT statement. Sized to stay well beneath SQLite's variable limit,
-// MySQL's max_allowed_packet, and PostgreSQL's 1GB message ceiling.
+// INSERT statement.
+//
+// 1000 is not a round number chosen for comfort: it is SQL Server's hard
+// limit on the rows a table value constructor may carry, so raising this
+// breaks mssql outright no matter how much headroom the other three have.
+// It also sits well beneath SQLite's variable limit, MySQL's
+// max_allowed_packet and PostgreSQL's 1GB message ceiling.
 const MaxRowsPerStatement = 1000
 
 // DefaultDialect is what an empty dialect field resolves to. Postgres'
@@ -65,6 +70,12 @@ type Dialect struct {
 	// MaxBoundParams is the maximum number of query parameters supported by
 	// a prepared statement in this dialect (e.g. 65535 postgres, 2100 mssql).
 	MaxBoundParams int
+	// TrueLiteral and FalseLiteral spell a boolean value. SQL Server has no
+	// boolean type and no TRUE/FALSE keywords - a BIT column takes 1 and 0,
+	// and an INSERT carrying the bare word TRUE is rejected by the server
+	// rather than coerced. The other three accept TRUE and FALSE.
+	TrueLiteral  string
+	FalseLiteral string
 }
 
 var dialects = map[string]Dialect{
@@ -74,6 +85,8 @@ var dialects = map[string]Dialect{
 		IdentClose:       '"',
 		PlaceholderStyle: PlaceholderDollar,
 		MaxBoundParams:   65535,
+		TrueLiteral:      "TRUE",
+		FalseLiteral:     "FALSE",
 	},
 	"sqlite": {
 		Name:             "sqlite",
@@ -81,6 +94,8 @@ var dialects = map[string]Dialect{
 		IdentClose:       '"',
 		PlaceholderStyle: PlaceholderQuestion,
 		MaxBoundParams:   32766,
+		TrueLiteral:      "TRUE",
+		FalseLiteral:     "FALSE",
 	},
 	"mysql": {
 		Name:             "mysql",
@@ -89,6 +104,8 @@ var dialects = map[string]Dialect{
 		EscapeBackslash:  true,
 		PlaceholderStyle: PlaceholderQuestion,
 		MaxBoundParams:   65535,
+		TrueLiteral:      "TRUE",
+		FalseLiteral:     "FALSE",
 	},
 	"mssql": {
 		Name:             "mssql",
@@ -97,6 +114,8 @@ var dialects = map[string]Dialect{
 		UnicodePrefix:    "N",
 		PlaceholderStyle: PlaceholderAtP,
 		MaxBoundParams:   2100,
+		TrueLiteral:      "1",
+		FalseLiteral:     "0",
 	},
 }
 
@@ -250,6 +269,9 @@ func (d Dialect) AppendPlaceholder(dst []byte, n int) []byte {
 // for nil, numbers are formatted without quotes, Raw expressions are emitted
 // verbatim, and strings are escaped. Unlike AppendString, an embedded NUL byte
 // returns ErrEmbeddedNUL to prevent silent data corruption.
+// On error dst is returned unchanged rather than as a nil slice, so that a
+// caller writing `dst, err = d.AppendValue(dst, v)` still holds the statement
+// it had built - otherwise the error destroys the context needed to report it.
 func (d Dialect) AppendValue(dst []byte, val any) ([]byte, error) {
 	if val == nil {
 		return append(dst, "NULL"...), nil
@@ -285,31 +307,31 @@ func (d Dialect) AppendValue(dst []byte, val any) ([]byte, error) {
 		return strconv.AppendUint(dst, v, 10), nil
 	case float32:
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			return nil, fmt.Errorf("sqlgen: unsupported float value: %v", v)
+			return dst, fmt.Errorf("sqlgen: unsupported float value: %v", v)
 		}
 		return strconv.AppendFloat(dst, float64(v), 'g', -1, 32), nil
 	case float64:
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, fmt.Errorf("sqlgen: unsupported float value: %v", v)
+			return dst, fmt.Errorf("sqlgen: unsupported float value: %v", v)
 		}
 		return strconv.AppendFloat(dst, v, 'g', -1, 64), nil
 	case bool:
 		if v {
-			return append(dst, "TRUE"...), nil
+			return append(dst, d.TrueLiteral...), nil
 		}
-		return append(dst, "FALSE"...), nil
+		return append(dst, d.FalseLiteral...), nil
 	case string:
 		if strings.IndexByte(v, 0) >= 0 {
-			return nil, ErrEmbeddedNUL
+			return dst, ErrEmbeddedNUL
 		}
 		return AppendString(dst, d, v), nil
 	case []byte:
 		if bytes.IndexByte(v, 0) >= 0 {
-			return nil, ErrEmbeddedNUL
+			return dst, ErrEmbeddedNUL
 		}
 		return AppendString(dst, d, v), nil
 	default:
-		return nil, fmt.Errorf("sqlgen: unsupported value type %T", val)
+		return dst, fmt.Errorf("sqlgen: unsupported value type %T", val)
 	}
 }
 

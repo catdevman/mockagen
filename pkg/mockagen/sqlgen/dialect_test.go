@@ -3,6 +3,7 @@ package sqlgen_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -439,5 +440,75 @@ func TestAppendValue(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestAppendValueBooleans pins the one value kind the four dialects spell
+// differently. SQL Server has no boolean type or TRUE/FALSE keywords, so a
+// BIT column takes 1 and 0 and an INSERT carrying the bare word TRUE is
+// rejected by the server rather than coerced.
+func TestAppendValueBooleans(t *testing.T) {
+	cases := []struct {
+		dialect      string
+		wantT, wantF string
+	}{
+		{"postgres", "TRUE", "FALSE"},
+		{"sqlite", "TRUE", "FALSE"},
+		{"mysql", "TRUE", "FALSE"},
+		{"mssql", "1", "0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dialect, func(t *testing.T) {
+			d, err := sqlgen.Lookup(tc.dialect)
+			if err != nil {
+				t.Fatalf("Lookup(%q): %v", tc.dialect, err)
+			}
+			got, err := d.AppendValue(nil, true)
+			if err != nil {
+				t.Fatalf("AppendValue(true): %v", err)
+			}
+			if string(got) != tc.wantT {
+				t.Errorf("true = %q, want %q", got, tc.wantT)
+			}
+			if got, err = d.AppendValue(nil, false); err != nil {
+				t.Fatalf("AppendValue(false): %v", err)
+			}
+			if string(got) != tc.wantF {
+				t.Errorf("false = %q, want %q", got, tc.wantF)
+			}
+		})
+	}
+}
+
+// TestAppendValuePreservesBufferOnError covers the contract that makes errors
+// reportable: a caller writing `dst, err = d.AppendValue(dst, v)` must still
+// hold the statement it had built, so every failure path returns dst rather
+// than nil.
+func TestAppendValuePreservesBufferOnError(t *testing.T) {
+	d, err := sqlgen.Lookup("postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "INSERT INTO t VALUES ("
+	for _, tc := range []struct {
+		name string
+		val  any
+	}{
+		{"embedded NUL in string", "a\x00b"},
+		{"embedded NUL in bytes", []byte("a\x00b")},
+		{"NaN", math.NaN()},
+		{"positive infinity", math.Inf(1)},
+		{"unsupported type", struct{ A int }{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := []byte(prefix)
+			got, err := d.AppendValue(dst, tc.val)
+			if err == nil {
+				t.Fatalf("AppendValue(%v) succeeded, want an error", tc.val)
+			}
+			if string(got) != prefix {
+				t.Errorf("buffer = %q, want it unchanged as %q", got, prefix)
+			}
+		})
 	}
 }

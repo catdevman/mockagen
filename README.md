@@ -266,8 +266,8 @@ mise run test-integration
 ```
 
 That is the whole workflow. The servers are declared in
-[integration_test.go](cmd/mockagen/integration_test.go) and started with
-testcontainers: each comes up the first time a test needs it - so running one
+[internal/dbtest](internal/dbtest/dbtest.go), which is the shared harness the
+integration tests across every package use, and started with testcontainers: each comes up the first time a test needs it - so running one
 dialect's subtest never starts SQL Server - and all of them are removed when
 the package's tests finish. testcontainers' reaper removes them even if the
 run panics or is killed, so a cancelled run cannot leave three database
@@ -282,9 +282,11 @@ never exercises; testcontainers is here for the lifecycle and for
 `Exec`/`CopyFileToContainer`, not for a connection string.
 
 Readiness is checked by running each server's own client inside its container
-(`pg_isready`, `mysqladmin ping`, `sqlcmd -Q "SELECT 1"`) rather than by
-probing a port, because all three of these images accept a connection before
-they will answer a query.
+(`psql -c "SELECT 1"`, `mysqladmin ping`, `sqlcmd -Q "SELECT 1"`) rather than
+by probing a port, because all three of these images accept a connection
+before they will answer a query - and postgres in particular reports ready via
+`pg_isready` while it is still replaying its init scripts, so the probe has to
+be a query.
 
 They earn their keep: the quote-everything rule in bulk mode, mysql's
 `ESCAPED BY ''`, the CR escaping in mysql literals, and both mssql

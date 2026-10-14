@@ -142,12 +142,18 @@ func Render(s Schema, opts RenderOptions) (mockagen.MockagenConfig, error) {
 
 	// Column order is not cosmetic here: the rendered spec is file_format
 	// "sql", and a bulk load maps CSV fields by position on mssql, so a
-	// reordered column list produces a silently misaligned load rather than
-	// an error. Ordinal is the database's own order, so prefer it wherever
-	// introspection filled it in; a hand-written schema leaves it zero and
-	// keeps the order its author wrote.
+	// reordered column list produces a successful load with every value in
+	// the wrong column rather than an error.
+	//
+	// Ordinal is the database's own order and is one-based, so zero means
+	// "not introspected". Sorting on a partially filled list would put every
+	// hand-added column ahead of ordinal 1 and cause exactly the
+	// misalignment this is here to prevent, so the list is reordered only
+	// when every column carries one. A hand-written or hand-extended schema
+	// keeps the order its author wrote, which is the only order anyone has
+	// expressed an intention about.
 	ordered := slices.Clone(s.Columns)
-	if slices.ContainsFunc(ordered, func(c Column) bool { return c.Ordinal != 0 }) {
+	if !slices.ContainsFunc(ordered, func(c Column) bool { return c.Ordinal <= 0 }) {
 		slices.SortStableFunc(ordered, func(a, b Column) int {
 			return cmp.Compare(a.Ordinal, b.Ordinal)
 		})

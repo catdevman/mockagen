@@ -71,9 +71,10 @@ Other rules:
 - **Anything needing docker goes behind `//go:build integration`** and runs only
   from `mise run test-integration`.
 - **Write meta-tests that guard the fixtures.** `TestBenchmarkSchemaTypesAreKnown`
-  (`cmd/mockagen/main_test.go`) exists because an unknown column type does not
-  error - it silently generates a random string - so a typo in a schema would
-  otherwise pass every test. Any new lookup table deserves the same guard.
+  (`cmd/mockagen/main_test.go`) exists because the generator resolves a column
+  type by bare map lookup, so a typo in a benchmark schema produces random
+  strings instead of an error and would otherwise pass every test. Any new
+  lookup table deserves the same guard.
 
 ## Performance
 
@@ -97,14 +98,14 @@ Two consequences:
   `null_percentage`, `blank`, `formula`, `min`, `max`, `format`, `decimals`,
   `selectionStyle`, `distribution`, `alignment`, `pad_character`. Do not assume a
   field works because it decodes.
-- **An unrecognised column `type` is not an error.** It silently produces a
-  random string.
-- **Config loading accepts `.yaml` but not `.yml`,** and panics on every failure
-  path.
-- **The output path is hardcoded** to `./output/<name>.<ext>` and nothing calls
-  `MkdirAll`, so runs outside a directory containing `output/` fail.
-- **`main.version`/`main.commit`/`main.date` do not exist** even though
-  `.goreleaser.yaml` injects them.
+- **`mockagen.Load` validates column types; the generator does not.** `Load`
+  rejects a type the catalog does not hold, and a type that needs a value list
+  without one. But `generateFakes` still resolves types by bare map lookup
+  (`mapToFaker[col.Type]`), so a `MockagenConfig` built in Go and passed
+  straight to it keeps the old silent fallback to random strings. Go through
+  `Load`, or validate with `pkg/mockagen/types` yourself.
+- **`LoadConfig` still panics** on every failure path, and its tests pin that.
+  `Load` is the error-returning one - use it everywhere new.
 - Example configs live in `test_data/`, which is *not* Go's ignored `testdata/`.
 - `PRD.md` on the `origin/features` branch is aspirational and that branch is not
   an ancestor of `main`. Do not implement from it without being asked.

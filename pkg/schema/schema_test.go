@@ -481,6 +481,18 @@ func TestRender_OrdinalOrder(t *testing.T) {
 			want: []string{"first", "second", "third"},
 		},
 		{
+			// The case that made the first version of this wrong: an unset
+			// ordinal is zero, so sorting a partially numbered list puts the
+			// hand-added column ahead of ordinal 1.
+			name: "a hand-added column does not jump ahead of numbered ones",
+			cols: []schema.Column{
+				{Name: "first", Ordinal: 1, Type: "GUID"},
+				{Name: "second", Ordinal: 2, Type: "GUID"},
+				{Name: "hand_added", Type: "GUID"},
+			},
+			want: []string{"first", "second", "hand_added"},
+		},
+		{
 			name: "no ordinals keeps the authored order",
 			cols: []schema.Column{
 				{Name: "b", Type: "GUID"},

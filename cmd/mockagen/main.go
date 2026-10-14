@@ -25,12 +25,6 @@ var (
 	version = "dev"
 	commit  = "none"
 	date    = "unknown"
-
-	configFile string
-	// outputFile holds the destination file path given by -output. Kept at
-	// package level alongside configFile so the flag parser can bind it
-	// directly before subcommand dispatch lands.
-	outputFile string
 )
 
 // validSubcommands enumerates the supported first-class verbs. An unknown
@@ -248,15 +242,6 @@ func ensureOutputDir(path string) error {
 		return nil
 	}
 	return os.MkdirAll(dir, 0o755)
-}
-
-// fatal reports a failure the user can act on - an unusable config value, an
-// output file that cannot be written - and exits non-zero. These are not
-// programmer errors, so they get a message rather than a panic and the stack
-// trace that comes with it.
-func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "mockagen:", err)
-	os.Exit(1)
 }
 
 // outputExt returns the extension the output file gets for a file_format.
