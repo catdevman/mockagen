@@ -73,31 +73,13 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		return runGenerate(cfg, out, stderr)
 
 	case "schema":
-		schemaFs := flag.NewFlagSet("schema", flag.ContinueOnError)
-		schemaFs.SetOutput(stderr)
-		if err := schemaFs.Parse(args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return 0
-			}
-			return 2
-		}
-		fmt.Fprintln(stderr, "mockagen: schema command not yet implemented")
-		return 1
+		return runSchema(args[1:], stdout, stderr)
 
 	case "map":
 		return runMap(args[1:], stdout, stderr)
 
 	case "import":
-		importFs := flag.NewFlagSet("import", flag.ContinueOnError)
-		importFs.SetOutput(stderr)
-		if err := importFs.Parse(args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return 0
-			}
-			return 2
-		}
-		fmt.Fprintln(stderr, "mockagen: import command not yet implemented")
-		return 1
+		return runImport(args[1:], stdout, stderr)
 
 	case "version":
 		versionFs := flag.NewFlagSet("version", flag.ContinueOnError)

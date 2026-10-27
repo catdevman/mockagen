@@ -64,6 +64,7 @@ const (
 	screenCheck
 	screenLookup
 	screenPick
+	screenObject
 )
 
 type focus int
@@ -83,6 +84,8 @@ const (
 	promptFormat
 	promptDefault
 	promptLookupKey
+	promptObjectKey
+	promptObjectConst
 )
 
 // stepOrder is the closed transform set. The editor cycles this list so
@@ -128,8 +131,13 @@ type Model struct {
 
 	editTarget string
 	editIdx    int
-	prompt     promptKind
-	input      textinput.Model
+	// objIdx is the key the object screen is on. objHints are keys
+	// parsed from the sample. They are not written: the schema has
+	// no key list, and one cell is not the document's shape.
+	objIdx   int
+	objHints []string
+	prompt   promptKind
+	input    textinput.Model
 
 	// lookupChoices is the schema's list of stored values, in schema
 	// order. lookupKeys[i] holds the source codes that store
@@ -307,6 +315,8 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenEdit:
 		return m.onEdit(msg)
+	case screenObject:
+		return m.onObject(msg)
 	case screenLookup:
 		return m.onLookup(msg)
 	case screenCheck:
@@ -346,7 +356,14 @@ func (m Model) onBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		m.toggleOmit()
 	case "t", "enter":
-		m.openEdit()
+		// json and jsonb get the object editor. A single source cell
+		// that is already a document stays a normal source until a key
+		// is added; opening the editor does not write those keys.
+		if isJSONColumn(m.column()) {
+			m.openObject()
+		} else {
+			m.openEdit()
+		}
 	case "v":
 		m.screen = screenCheck
 	case "s":
@@ -563,6 +580,10 @@ func (m *Model) commitPrompt() {
 		m.setDefault(text)
 	case promptLookupKey:
 		m.addLookupKey(text)
+	case promptObjectKey:
+		m.addObjectKey(text)
+	case promptObjectConst:
+		m.setObjectConstant(text)
 	}
 }
 

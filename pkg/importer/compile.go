@@ -5,22 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/catdevman/mockagen/pkg/schema"
-)
-
-// Kind is the coarse type a column is coerced into. It comes from sql_type.
-// The generator type and the column's format are decisions about fake data,
-// and a schema whose generator type is still unresolved still has to load.
-type Kind int
-
-const (
-	KindText Kind = iota
-	KindInt
-	KindFloat
-	KindBool
-	KindTime
-	KindBinary
 )
 
 // Plan is a compiled field map: the columns an INSERT would write, in schema
@@ -33,6 +20,40 @@ const (
 // faults about columns that are not written.
 type Plan struct {
 	Write []Planned
+	// Target is the sink's view of the write list. Omitted columns are
+	// absent, so an INSERT names only the columns the plan fills.
+	Target Target
+
+	// binds, names, scratch, and cells are filled by prepare and reused
+	// by Apply. Copying a Plan shares them; one Plan serves one Run.
+	binds   []binding
+	names   map[string]int
+	scratch []byte
+	hold    []byte
+}
+
+// binding is one written column with its source positions resolved.
+// lit is set when the value does not depend on the row, so Apply copies
+// bytes instead of running the chain again.
+type binding struct {
+	field Field
+	col   schema.Column
+	idx   []int
+	lit   literal
+	obj   bool
+	// kind is classified once. classify walks the type spelling, and
+	// strings.Fields inside that walk allocates; the type does not
+	// change between rows.
+	kind Kind
+}
+
+// literal is a value known at compile time. text is owned by the binding.
+type literal struct {
+	ok   bool
+	kind Kind
+	num  int64
+	flt  float64
+	text []byte
 }
 
 // Planned is one written column and the field that fills it.
@@ -108,8 +129,16 @@ func Compile(sch schema.Schema, m FieldMap) (*Plan, []Diagnostic) {
 			add(err)
 			broken = true
 		}
+		if f.Object != nil {
+			checkObjectTree(f.Object, add)
+		}
 		if !broken && f.Constant != nil {
-			if _, _, err := Apply(col, f, nil); err != nil {
+			// A json column's constant is the document, not a string
+			// that coercion would accept. "active" is legal text and
+			// illegal JSON, and the failure is the map's, not row 1's.
+			if isJSONDoc(col.SQLType) && !jsonValid(f.Constant) {
+				add(fmt.Errorf("%w: constant is not valid JSON", ErrBadConstant))
+			} else if _, _, err := Apply(col, f, nil); err != nil {
 				add(fmt.Errorf("%w: %s", ErrBadConstant, err))
 			}
 		}
@@ -144,7 +173,43 @@ func Compile(sch schema.Schema, m FieldMap) (*Plan, []Diagnostic) {
 		}
 		diags = append(diags, Diagnostic{Column: col.Name, Err: ErrBlocker})
 	}
+	plan.prepare(sch, m)
 	return plan, diags
+}
+
+// checkObjectTree rejects a leaf that has two origins, a format, a
+// transform the chain cannot run, or a constant that is not valid UTF-8.
+// A leaf constant is encoded as a JSON string; invalid UTF-8 would be
+// rewritten or rejected by the parser, so it fails here, with the rest
+// of the map, instead of on the first row.
+func checkObjectTree(obj *Object, add func(error)) {
+	if obj == nil {
+		return
+	}
+	for i := range obj.Keys {
+		k := &obj.Keys[i]
+		f := k.asField()
+		if err := originError(f); err != nil {
+			add(err)
+		}
+		if f.Format != "" {
+			add(ErrFormatNotTime)
+		}
+		for ti := range k.Transforms {
+			if err := checkTransform(&k.Transforms[ti]); err != nil {
+				add(err)
+			}
+		}
+		if err := chainKinds(k.Transforms); err != nil && !errors.Is(err, ErrUnknownTransform) {
+			add(err)
+		}
+		if k.Constant != nil && !utf8.ValidString(*k.Constant) {
+			add(fmt.Errorf("%w: key %s: constant is not valid JSON", ErrBadConstant, k.Key))
+		}
+		if k.Object != nil {
+			checkObjectTree(k.Object, add)
+		}
+	}
 }
 
 func canOmit(col schema.Column) bool {
@@ -170,6 +235,9 @@ func originError(f Field) error {
 	if f.Constant != nil {
 		n++
 	}
+	if f.Object != nil {
+		n++
+	}
 	switch n {
 	case 0:
 		return ErrNoOrigin
@@ -187,6 +255,17 @@ func fieldSources(f Field) []string {
 	}
 	names = append(names, f.Sources...)
 	names = append(names, f.Coalesce...)
+	if f.Object != nil {
+		names = append(names, objectSources(f.Object)...)
+	}
+	return names
+}
+
+func objectSources(obj *Object) []string {
+	var names []string
+	for i := range obj.Keys {
+		names = append(names, fieldSources(obj.Keys[i].asField())...)
+	}
 	return names
 }
 

@@ -34,7 +34,7 @@ var (
 	ErrChainKind = errors.New("importer: transform chain kinds do not line up")
 
 	// ErrTwoOrigins means a field set more than one of source, sources,
-	// coalesce, and constant. Which value would win is not defined.
+	// coalesce, constant, and object. Which value would win is not defined.
 	ErrTwoOrigins = errors.New("importer: field has more than one origin")
 
 	// ErrSourcesNeedJoin means sources was set without join. Several sources
@@ -105,4 +105,22 @@ var (
 	// ErrLookupMiss means a finished lookup had no pair for the value and
 	// no default. It is a row error: the set of incoming codes is data.
 	ErrLookupMiss = errors.New("importer: lookup miss")
+
+	// ErrHeaderMismatch means the file's header is not the one the map
+	// pinned. Both lists are in the error so a swap is visible; a load
+	// that continued would write values into the wrong columns.
+	ErrHeaderMismatch = errors.New("importer: header does not match the map")
+
+	// ErrShortRow means a headerless row does not cover an index the map
+	// stored. The index is the only name that column has.
+	ErrShortRow = errors.New("importer: row is shorter than the map's indexes")
+
+	// ErrUnsupportedEncoding means the map names an encoding other than
+	// utf-8. Transcoding would be a second reader, and the writers emit
+	// utf-8.
+	ErrUnsupportedEncoding = errors.New("importer: encoding is not utf-8")
+
+	// ErrUnknownFormat means source.format is not one this package reads.
+	// yaml, fixed, fluent, and parquet are later tasks.
+	ErrUnknownFormat = errors.New("importer: unsupported source format")
 )

@@ -99,6 +99,7 @@ const (
 	originJoin
 	originCoalesce
 	originConstant
+	originObject
 	originBad
 )
 
@@ -126,6 +127,10 @@ func originOf(f Field) origin {
 		n++
 		which = originConstant
 	}
+	if f.Object != nil {
+		n++
+		which = originObject
+	}
 	if n != 1 {
 		return originBad
 	}
@@ -141,6 +146,8 @@ func reduce(f Field, inputs []string) (string, error) {
 			return "", fmt.Errorf("importer: source %q: got %d values, want 1", f.Source, len(inputs))
 		}
 		return inputs[0], nil
+	case originObject:
+		return assembleObject(f.Object, inputs)
 	case originJoin:
 		if len(inputs) != len(f.Sources) {
 			return "", fmt.Errorf("importer: join %q: got %d values, want %d", f.Target, len(inputs), len(f.Sources))
@@ -465,20 +472,24 @@ func parseTypeNum(sqlType string, idx int) (int64, bool) {
 }
 
 func decimalDigits(s string) (intDigits, fracDigits int, err error) {
+	// No Split. A one-element slice per numeric cell would show up as an
+	// allocation on the steady-state path the arena exists to avoid.
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "+")
 	s = strings.TrimPrefix(s, "-")
 	if s == "" {
 		return 0, 0, fmt.Errorf("empty number")
 	}
-	parts := strings.Split(s, ".")
-	if len(parts) > 2 {
-		return 0, 0, fmt.Errorf("invalid number %q", s)
+	intPart := s
+	var frac string
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		if strings.IndexByte(s[dot+1:], '.') >= 0 {
+			return 0, 0, fmt.Errorf("invalid number %q", s)
+		}
+		intPart = s[:dot]
+		frac = s[dot+1:]
 	}
-	intPart := strings.TrimLeft(parts[0], "0")
-	intDigits = len(intPart)
-	if len(parts) == 2 {
-		fracDigits = len(strings.TrimRight(parts[1], "0"))
-	}
-	return intDigits, fracDigits, nil
+	intPart = strings.TrimLeft(intPart, "0")
+	frac = strings.TrimRight(frac, "0")
+	return len(intPart), len(frac), nil
 }

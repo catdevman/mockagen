@@ -53,9 +53,10 @@ type UnmappedPolicy struct {
 }
 
 // Field is one target column's value. Exactly one origin is set: Source,
-// Sources plus Join, Coalesce, or Constant. Join is a pointer so an empty
-// separator (concatenate with nothing) survives omitempty, which would drop
-// a plain empty string and turn a legal join into ErrSourcesNeedJoin.
+// Sources plus Join, Coalesce, Constant, or Object. Join is a pointer so
+// an empty separator (concatenate with nothing) survives omitempty, which
+// would drop a plain empty string and turn a legal join into
+// ErrSourcesNeedJoin.
 type Field struct {
 	Target     string      `yaml:"target" json:"target"`
 	Source     string      `yaml:"source,omitempty" json:"source,omitempty"`
@@ -63,6 +64,7 @@ type Field struct {
 	Join       *string     `yaml:"join,omitempty" json:"join,omitempty"`
 	Coalesce   []string    `yaml:"coalesce,omitempty" json:"coalesce,omitempty"`
 	Constant   *string     `yaml:"constant,omitempty" json:"constant,omitempty"`
+	Object     *Object     `yaml:"object,omitempty" json:"object,omitempty"`
 	Transforms []Transform `yaml:"transforms,omitempty" json:"transforms,omitempty"`
 	Format     string      `yaml:"format,omitempty" json:"format,omitempty"`
 	NullIf     []string    `yaml:"null_if,omitempty" json:"null_if,omitempty"`

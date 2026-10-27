@@ -21,6 +21,8 @@ func (m Model) View() string {
 		return m.viewLookup()
 	case screenPick:
 		return m.viewPick()
+	case screenObject:
+		return m.viewObject()
 	default:
 		return m.viewBoard()
 	}
@@ -197,6 +199,75 @@ func (m Model) viewEdit() string {
 
 const editHelp = "↑↓ step  ] cycle  a add  d drop  e arg  n null  f format  b default  esc back"
 
+const objectHelp = "j/k key   h/l source   a add   space bind   c const   d drop   s save   esc back"
+
+// viewObject draws the json/jsonb editor. Hints are shown and not
+// stored: the screen writes a key only when one is typed.
+func (m Model) viewObject() string {
+	col := m.columnBy(m.editTarget)
+	f := m.field(m.editTarget)
+	var b strings.Builder
+	b.WriteString(m.titleLine())
+	b.WriteString("\n\n")
+	head := m.editTarget + "   " + col.SQLType
+	if f != nil {
+		head += "   " + originLabel(*f)
+	}
+	b.WriteString(m.styles.title.Render(clip(head, m.width)))
+	b.WriteString("\n\nkeys\n")
+	if f == nil || f.Object == nil || len(f.Object.Keys) == 0 {
+		b.WriteString(m.styles.faint.Render("(no keys yet)"))
+		b.WriteByte('\n')
+	} else {
+		for i, k := range f.Object.Keys {
+			mark := "  "
+			if i == m.objIdx {
+				mark = "> "
+			}
+			line := clip(mark+k.Key+"    "+objectKeyLabel(k), m.width)
+			if i == m.objIdx {
+				line = m.styles.selected.Render(line)
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	hints := "(none)"
+	if len(m.objHints) > 0 {
+		hints = strings.Join(m.objHints, ", ")
+	}
+	b.WriteString("\nhints  " + hints + "\n")
+	src := "(none)"
+	names := m.sourceNames()
+	if m.src >= 0 && m.src < len(names) {
+		src = names[m.src]
+	}
+	b.WriteString("bind source  " + src + "\n")
+	if m.prompt != promptNone {
+		b.WriteByte('\n')
+		b.WriteString(m.input.View())
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	b.WriteString(m.styles.faint.Render(clip(objectHelp, m.width)))
+	b.WriteByte('\n')
+	b.WriteString(clip(m.noteLine(), m.width))
+	return b.String()
+}
+
+func objectKeyLabel(k importer.ObjectField) string {
+	switch {
+	case k.Constant != nil:
+		return fmt.Sprintf("constant %q", *k.Constant)
+	case k.Source != "":
+		return "← " + k.Source
+	case k.Object != nil:
+		return "object"
+	default:
+		return "no origin"
+	}
+}
+
 // unfinishedHint is shown under the check screen's diagnostic. The
 // to: list reads like a finished mapping, and editing those names
 // does not give the lookup any incoming keys.
@@ -369,8 +440,10 @@ func (m Model) sourceLines(inner int) []string {
 	}
 	used := map[string]string{}
 	for _, f := range m.fm.Fields {
-		if f.Source != "" && used[f.Source] == "" {
-			used[f.Source] = f.Target
+		for _, name := range importer.SourceNames(f) {
+			if used[name] == "" {
+				used[name] = f.Target
+			}
 		}
 	}
 	lines := make([]string, len(names))
@@ -493,13 +566,10 @@ func (m Model) rowInputs(f importer.Field, row []string) ([]string, string) {
 	if f.Constant != nil {
 		return nil, fmt.Sprintf("constant %q", *f.Constant)
 	}
-	names := f.Sources
-	switch {
-	case f.Source != "":
-		names = []string{f.Source}
-	case len(f.Coalesce) > 0:
-		names = f.Coalesce
-	}
+	// SourceNames walks object keys in the order Apply reads them.
+	// A preview that used only Field.Source would pass the wrong cells
+	// once the origin is an object.
+	names := importer.SourceNames(f)
 	vals := make([]string, len(names))
 	for i, name := range names {
 		vals[i] = m.cell(row, name)
@@ -560,6 +630,8 @@ func (m Model) noteLine() string {
 
 func originLabel(f importer.Field) string {
 	switch {
+	case f.Object != nil:
+		return "object"
 	case f.Constant != nil:
 		return fmt.Sprintf("constant %q", *f.Constant)
 	case f.Source != "":
