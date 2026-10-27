@@ -5,3 +5,6 @@ main
 /dist
 bench-results/
 .bench-base/
+# Local map walkthrough. Tests use temp files; the schema example is
+# pinned in pkg/schema/schema_test.go.
+/examples/
