@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -26,9 +28,11 @@ type Sample struct {
 	Indexes   []int
 	Rows      int
 	// Preview is the data rows this read already walked, copied out of the
-	// csv reader's reused buffer. The mapping screen shows them beside the
-	// chain. A second pass could observe a file that changed underneath,
-	// and the cap is the same sample limit either way.
+	// source buffer. NULL is "" because Preview is [][]string; the import
+	// path still uses OpenSource and keeps the kinds. The mapping screen
+	// shows the rows beside the chain. A second pass could observe a file
+	// that changed underneath, and the cap is the same sample limit either
+	// way.
 	Preview [][]string
 }
 
@@ -53,12 +57,196 @@ func HeaderMatches(spec SourceSpec, sample Sample) bool {
 //
 // limit counts data rows, not the header. Zero reads the header only.
 func ReadSample(path string, limit int) (Sample, error) {
-	f, err := os.Open(path)
+	return ReadSampleSpec(path, nil, limit)
+}
+
+// ReadSampleSpec reads like ReadSample. A spec with Format set is that
+// format, because a fixed file's positions live on the map and the
+// extension cannot carry them. An empty format follows the extension;
+// anything else stays on the CSV sniffer, which is what a .csv file
+// with a tab delimiter still needs.
+func ReadSampleSpec(path string, spec *SourceSpec, limit int) (Sample, error) {
+	format := ""
+	if spec != nil {
+		format = spec.Format
+	}
+	if format == "" {
+		format = sampleFormat(path)
+	}
+	if format == "" {
+		f, err := os.Open(path)
+		if err != nil {
+			return Sample{}, err
+		}
+		defer f.Close()
+		return readSample(f, limit)
+	}
+	return readSampleSource(path, spec, strings.ToLower(format), limit)
+}
+
+// sampleFormat is the extension dispatch for a map that has not named a
+// format. csv is absent on purpose: a comma file and a tab file share
+// the extension, and the sniffer is what tells them apart.
+func sampleFormat(path string) string {
+	switch strings.ToLower(extOf(path)) {
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".jsonl":
+		return "jsonl"
+	case ".parquet":
+		return "parquet"
+	case ".log":
+		return "fluent"
+	case ".fixed":
+		return "fixed"
+	case ".tsv":
+		return "tsv"
+	default:
+		return ""
+	}
+}
+
+// readSampleSource opens path with OpenSource so a fixed layout, a
+// parquet kind, and a yaml scalar keep the meanings the sniffer does
+// not have. Preview flattens those kinds to strings afterwards.
+func readSampleSource(path string, spec *SourceSpec, format string, limit int) (Sample, error) {
+	openSpec := SourceSpec{Format: format}
+	if spec != nil {
+		openSpec = *spec
+		openSpec.Format = format
+	} else if format == "tsv" {
+		// A .tsv name is the header row plus a tab. Leaving HasHeader
+		// false would publish the first data row as the column names.
+		openSpec.HasHeader = true
+	}
+	src, err := OpenSource(path, openSpec)
 	if err != nil {
 		return Sample{}, err
 	}
-	defer f.Close()
-	return readSample(f, limit)
+	defer src.Close()
+
+	fields := append([]string(nil), src.Fields()...)
+	seen := map[string]bool{}
+	for _, name := range fields {
+		if seen[name] {
+			return Sample{}, fmt.Errorf("importer: duplicate header %q", name)
+		}
+		seen[name] = true
+	}
+
+	hasHeader := true
+	if spec != nil {
+		hasHeader = spec.HasHeader
+	}
+	var indexes []int
+	if len(fields) == 0 && !hasHeader {
+		w, err := widthOf(src)
+		if err != nil {
+			return Sample{}, err
+		}
+		indexes = make([]int, w)
+		for i := range indexes {
+			indexes[i] = i
+		}
+	}
+
+	rows := 0
+	var preview [][]string
+	var rec Record
+	for rows < limit {
+		ok, err := src.Next(&rec)
+		if err != nil {
+			return Sample{}, err
+		}
+		if !ok {
+			break
+		}
+		preview = append(preview, previewRow(&rec))
+		rows++
+	}
+	enc := "utf-8"
+	if spec != nil && spec.Encoding != "" {
+		enc = spec.Encoding
+	}
+	if !sampleUTF8(fields, preview) {
+		// Same reason as the sniffer: recording utf-8 for bytes that
+		// are not utf-8 would make import decode them again.
+		enc = "unknown"
+	}
+	return Sample{
+		Format:    format,
+		Delimiter: sampleDelimiter(format, spec),
+		HasHeader: hasHeader,
+		Encoding:  enc,
+		Fields:    fields,
+		Indexes:   indexes,
+		Rows:      rows,
+		Preview:   preview,
+	}, nil
+}
+
+// sampleDelimiter is the separator Propose will pin. An empty csv
+// delimiter is a comma, which is what openCSV already assumes;
+// leaving it blank would drop the key and a later sniff could
+// disagree with this read.
+func sampleDelimiter(format string, spec *SourceSpec) string {
+	if spec != nil && spec.Delimiter != "" {
+		return spec.Delimiter
+	}
+	switch format {
+	case "tsv":
+		return "\t"
+	case "csv":
+		return ","
+	default:
+		return ""
+	}
+}
+
+// sampleUTF8 reports whether the names and the preview are UTF-8.
+// The encoding field is what a later import believes; marking a
+// non-UTF-8 sample as utf-8 would decode it a second time.
+func sampleUTF8(fields []string, preview [][]string) bool {
+	if !utf8.ValidString(strings.Join(fields, "")) {
+		return false
+	}
+	for _, row := range preview {
+		if !utf8.ValidString(strings.Join(row, "")) {
+			return false
+		}
+	}
+	return true
+}
+
+// previewRow copies one record into strings. A number or bool is
+// strconv'd, and a KindTime instant is RFC3339Nano, because the screen
+// has no kinds. NULL is "" so it fits that grid; the import keeps the
+// kind.
+func previewRow(r *Record) []string {
+	out := make([]string, len(r.Values))
+	for i := range r.Values {
+		v := r.Values[i]
+		switch v.Kind {
+		case KindNull:
+		case KindInt:
+			out[i] = strconv.FormatInt(v.num, 10)
+		case KindFloat:
+			out[i] = strconv.FormatFloat(v.flt, 'f', -1, 64)
+		case KindBool:
+			if v.num != 0 {
+				out[i] = "true"
+			} else {
+				out[i] = "false"
+			}
+		case KindTime:
+			out[i] = time.Unix(0, v.num).UTC().Format(time.RFC3339Nano)
+		case KindText, KindRaw:
+			out[i] = string(r.Bytes(i))
+		}
+	}
+	return out
 }
 
 func readSample(r io.Reader, limit int) (Sample, error) {

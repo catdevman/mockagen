@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/catdevman/mockagen/pkg/mockagen/sqlgen"
 )
@@ -201,6 +202,8 @@ func (s *SQLSink) appendVal(dst []byte, r *Record, i int) ([]byte, error) {
 			return append(dst, s.d.TrueLiteral...), nil
 		}
 		return append(dst, s.d.FalseLiteral...), nil
+	case KindTime:
+		return appendSQLInstant(dst, s.d, v.num), nil
 	case KindRaw:
 		return append(dst, r.Bytes(i)...), nil
 	default:
@@ -210,6 +213,17 @@ func (s *SQLSink) appendVal(dst []byte, r *Record, i int) ([]byte, error) {
 		}
 		return sqlgen.AppendString(dst, s.d, b), nil
 	}
+}
+
+// appendSQLInstant quotes a KindTime value. Bytes is nil for that kind,
+// so the default arm would emit an empty string. The buffer stays in
+// this function: appendVal is on the steady-state path, and an escaped
+// array there would allocate on every text cell. CSV text times stay
+// KindText; this is only the parquet instant.
+func appendSQLInstant(dst []byte, d sqlgen.Dialect, nanos int64) []byte {
+	var tmp [40]byte
+	b := time.Unix(0, nanos).UTC().AppendFormat(tmp[:0], time.RFC3339Nano)
+	return sqlgen.AppendString(dst, d, b)
 }
 
 func (s *SQLSink) Close(context.Context) error {
@@ -296,9 +310,20 @@ func appendCSVValue(dst []byte, r *Record, i int) []byte {
 			return appendQuoted(dst, []byte("true"))
 		}
 		return appendQuoted(dst, []byte("false"))
+	case KindTime:
+		return appendCSVInstant(dst, v.num)
 	default:
 		return appendQuoted(dst, r.Bytes(i))
 	}
+}
+
+// appendCSVInstant quotes a KindTime instant the way text is quoted.
+// The format buffer is local for the same reason as appendSQLInstant:
+// this switch's other arms are the steady-state write.
+func appendCSVInstant(dst []byte, nanos int64) []byte {
+	var tmp [40]byte
+	b := time.Unix(0, nanos).UTC().AppendFormat(tmp[:0], time.RFC3339Nano)
+	return appendQuoted(dst, b)
 }
 
 func appendQuoted(dst, field []byte) []byte {
@@ -376,9 +401,19 @@ func appendJSONField(dst []byte, r *Record, i int) ([]byte, error) {
 			return append(dst, "true"...), nil
 		}
 		return append(dst, "false"...), nil
+	case KindTime:
+		return appendJSONInstant(dst, v.num)
 	default:
 		return appendJSONString(dst, r.Bytes(i))
 	}
+}
+
+// appendJSONInstant quotes a KindTime instant as a JSON string. Boxing
+// the time as any would allocate, and Bytes would encode nothing.
+func appendJSONInstant(dst []byte, nanos int64) ([]byte, error) {
+	var tmp [40]byte
+	b := time.Unix(0, nanos).UTC().AppendFormat(tmp[:0], time.RFC3339Nano)
+	return appendJSONString(dst, b)
 }
 
 // BulkSink writes a quoted CSV and the dialect's load script. The pair is

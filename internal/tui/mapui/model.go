@@ -6,6 +6,7 @@ package mapui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -151,8 +152,17 @@ type Model struct {
 	lookupIdx     int
 
 	diags []importer.Diagnostic
-	note  string
-	save  bool
+	// report is nil when Compile found a diagnostic. A plan with
+	// diagnostics is not run, which is the same rule as mockagen import.
+	report *importer.Report
+	// runErr is set when Run fails. The report is still kept: abort
+	// returns the first bad row on the report and the error together.
+	runErr error
+	// sampleCols is Target.Columns order. Samples are in that order,
+	// and the schema list still contains columns the plan omitted.
+	sampleCols []string
+	note       string
+	save       bool
 	// baseline is the map as YAML at open, and again after each s. q
 	// compares against it, so a quit with no edits does not stop to
 	// ask. The compiled regexp cache is not in the YAML, so a refresh
@@ -587,8 +597,44 @@ func (m *Model) commitPrompt() {
 	}
 }
 
+// refresh recompiles and, when that is clean, runs the sample. A
+// diagnostic list is not run: that is the same rule as mockagen
+// import, and a preview of a broken plan would look like a load.
 func (m *Model) refresh() {
-	_, m.diags = importer.Compile(m.sch, m.fm)
+	p, diags := importer.Compile(m.sch, m.fm)
+	m.diags = diags
+	m.report = nil
+	m.runErr = nil
+	m.sampleCols = nil
+	if len(m.diags) > 0 {
+		return
+	}
+	m.sampleCols = make([]string, len(p.Target.Columns))
+	for i, col := range p.Target.Columns {
+		m.sampleCols[i] = col.Name
+	}
+	n := len(m.sample.Preview)
+	rep, err := importer.Run(context.Background(), previewSource(m.sample), p,
+		importer.DiscardSink{}, importer.Options{Limit: n, SampleRows: n})
+	m.report = rep
+	m.runErr = err
+}
+
+// previewSource is the rows the screen already read. Run must not
+// open the file again: a second pass could see a different file.
+// A pointer to "" is empty. Preview cells are plain strings, so
+// none of them is the nil pointer that would mean NULL.
+func previewSource(sample importer.Sample) *importer.SliceSource {
+	rows := make([][]*string, len(sample.Preview))
+	for i, row := range sample.Preview {
+		cells := make([]*string, len(row))
+		for j := range row {
+			v := row[j]
+			cells[j] = &v
+		}
+		rows[i] = cells
+	}
+	return importer.NewSliceSource(sample.Fields, rows)
 }
 
 func (m *Model) placeCursor() {

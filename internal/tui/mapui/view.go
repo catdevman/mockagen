@@ -2,6 +2,7 @@ package mapui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/catdevman/mockagen/pkg/importer"
@@ -72,6 +73,10 @@ func (m Model) viewBoard() string {
 	for _, line := range m.diagLines(3) {
 		b.WriteByte('\n')
 		b.WriteString(m.styles.bad.Render(clip(line, m.width)))
+	}
+	if m.runErr != nil {
+		b.WriteByte('\n')
+		b.WriteString(m.styles.bad.Render(clip(m.runErr.Error(), m.width)))
 	}
 	for i, line := range m.enumGaps() {
 		if i == 3 {
@@ -180,7 +185,7 @@ func (m Model) viewEdit() string {
 	if f == nil {
 		b.WriteString("(no field)\n")
 	} else {
-		for _, line := range m.sampleLines(*f) {
+		for _, line := range m.editSample(*f) {
 			b.WriteString(clip(line, m.width))
 			b.WriteByte('\n')
 		}
@@ -286,26 +291,25 @@ func (m Model) viewCheck() string {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nrows\n")
-	shown := 0
-	for _, f := range m.fm.Fields {
-		for _, line := range m.sampleLines(f) {
-			if !strings.Contains(line, "→  ") {
-				continue
-			}
-			// The outcome half is the part a person came here to see.
-			// Quiet successes stay on the editor; this screen is the
-			// failures.
-			if !strings.Contains(line, "importer:") && !strings.Contains(line, "invalid") {
-				continue
-			}
-			b.WriteString(clip(f.Target+"  "+line, m.width))
-			b.WriteByte('\n')
-			shown++
-		}
-	}
-	if shown == 0 {
-		b.WriteString(m.styles.faint.Render("no row errors in the sample"))
+	if m.report == nil {
+		// Compile failed, so Run was not called. Saying the sample
+		// had no errors would read as a clean load.
+		b.WriteString(m.styles.faint.Render("not run"))
 		b.WriteByte('\n')
+	} else {
+		rep := m.report
+		line := fmt.Sprintf("read %d, wrote %d, skipped %d, errors %d",
+			rep.Read, rep.Written, rep.Skipped, len(rep.Errors))
+		b.WriteString(clip(line, m.width))
+		b.WriteByte('\n')
+		for _, line := range m.errorGroups() {
+			b.WriteString(m.styles.bad.Render(clip(line, m.width)))
+			b.WriteByte('\n')
+		}
+		if m.runErr != nil {
+			b.WriteString(m.styles.bad.Render(clip(m.runErr.Error(), m.width)))
+			b.WriteByte('\n')
+		}
 	}
 	if m.unfinished() {
 		b.WriteByte('\n')
@@ -507,7 +511,13 @@ func (m Model) targetState(col schema.Column) string {
 	return "BLOCKER"
 }
 
+// focusedPreview is one cell of the first row Run kept. A compile
+// failure has no report; the Apply line is only a fallback and does
+// not mean the plan was run.
 func (m Model) focusedPreview() string {
+	if m.report != nil {
+		return m.reportPreview()
+	}
 	f := m.focusedField()
 	if f == nil || len(m.sample.Preview) == 0 {
 		return ""
@@ -517,6 +527,49 @@ func (m Model) focusedPreview() string {
 		return ""
 	}
 	return lines[0]
+}
+
+// reportPreview names the cell from sampleCols. Samples are write
+// order, and the schema list still includes columns that were omitted.
+func (m Model) reportPreview() string {
+	if m.report == nil || len(m.report.Samples) == 0 {
+		return ""
+	}
+	name := m.column().Name
+	rec := m.report.Samples[0]
+	for i, col := range m.sampleCols {
+		if col != name {
+			continue
+		}
+		return name + "  " + sampleCell(rec, i)
+	}
+	return ""
+}
+
+// sampleCell spells a stored value. An int lives in the numeric
+// slot, so the arena would be empty and look like a blank. NULL
+// is the word, because an empty string is a real value.
+func sampleCell(rec importer.Record, i int) string {
+	if i < 0 || i >= len(rec.Values) {
+		return "NULL"
+	}
+	switch rec.Values[i].Kind {
+	case importer.KindNull:
+		return "NULL"
+	case importer.KindInt:
+		return strconv.FormatInt(rec.Int(i), 10)
+	case importer.KindFloat:
+		return strconv.FormatFloat(rec.Float(i), 'f', -1, 64)
+	case importer.KindBool:
+		if rec.Bool(i) {
+			return "true"
+		}
+		return "false"
+	case importer.KindText, importer.KindRaw:
+		return string(rec.Bytes(i))
+	default:
+		return "NULL"
+	}
 }
 
 func (m Model) afterChain(f *importer.Field, col schema.Column) string {
@@ -538,6 +591,47 @@ func (m Model) afterChain(f *importer.Field, col schema.Column) string {
 	b.WriteString("default   " + def + "\n")
 	b.WriteString("schema    " + factsLine(col) + "\n")
 	return b.String()
+}
+
+// editSample shows at most three rows. The chain, null_if, and the
+// checks are Stages, so this screen does not grow a second Apply.
+// A sample with no rows falls back to the one-line outcome.
+func (m Model) editSample(f importer.Field) []string {
+	if len(m.sample.Preview) == 0 {
+		return m.sampleLines(f)
+	}
+	n := len(m.sample.Preview)
+	if n > 3 {
+		n = 3
+	}
+	col := m.columnBy(f.Target)
+	lines := make([]string, 0, n*2)
+	for i := 0; i < n; i++ {
+		in, label := m.rowInputs(f, m.sample.Preview[i])
+		lines = append(lines, fmt.Sprintf("%d  %s", i+1, label))
+		var stages strings.Builder
+		for j, st := range importer.Stages(col, f, in) {
+			if j > 0 {
+				stages.WriteString("   ")
+			}
+			stages.WriteString(stageText(st))
+		}
+		lines = append(lines, stages.String())
+	}
+	return lines
+}
+
+// stageText prints the failure on the step that returned it. The
+// value is omitted then, because a carried-over value would look
+// like the step had succeeded.
+func stageText(st importer.Stage) string {
+	if st.Err != nil {
+		return st.Name + "  " + st.Err.Error()
+	}
+	if st.Null {
+		return st.Name + "  NULL"
+	}
+	return st.Name + "  " + st.Value
 }
 
 func (m Model) sampleLines(f importer.Field) []string {
@@ -598,6 +692,38 @@ func outcome(in, got string, isNull bool, err error) string {
 		return in + "  →  NULL"
 	}
 	return in + "  →  " + got
+}
+
+// errorGroups buckets Report.Errors by target and reason. The line
+// numbers stay under the pair so two failures of one column do not
+// become two unrelated rows.
+func (m Model) errorGroups() []string {
+	if m.report == nil {
+		return nil
+	}
+	type pair struct {
+		target string
+		reason string
+	}
+	var order []pair
+	lines := map[pair][]string{}
+	for _, e := range m.report.Errors {
+		reason := ""
+		if e.Err != nil {
+			reason = e.Err.Error()
+		}
+		k := pair{e.Target, reason}
+		if _, ok := lines[k]; !ok {
+			order = append(order, k)
+		}
+		lines[k] = append(lines[k], strconv.FormatInt(e.Line, 10))
+	}
+	out := make([]string, 0, len(order)*2)
+	for _, k := range order {
+		out = append(out, k.target+"  "+k.reason)
+		out = append(out, "line "+strings.Join(lines[k], ", "))
+	}
+	return out
 }
 
 func (m Model) diagLines(limit int) []string {

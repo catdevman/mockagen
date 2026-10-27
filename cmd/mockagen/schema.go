@@ -33,12 +33,16 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("schema", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var dialect, dsn, table, outPath, renderPath, updatePath string
+	var tui bool
 	fs.StringVar(&dialect, "dialect", "", "postgres, mysql, mssql, or sqlite")
 	fs.StringVar(&dsn, "dsn", "", "connection string, or a sqlite database path")
 	fs.StringVar(&table, "table", "", "table to read (schema-qualified as public.users)")
 	fs.StringVar(&outPath, "o", "", "schema file to write (default stdout)")
 	fs.StringVar(&renderPath, "render", "", "also write a generation spec to this path")
 	fs.StringVar(&updatePath, "update", "", "refresh facts in this schema file")
+	// -tui is opt-in. A script keeps the flagless path, which still
+	// exits 2 when dialect, dsn, or table was left off.
+	fs.BoolVar(&tui, "tui", false, "open the schema screen; ask for anything not passed as a flag")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -48,6 +52,12 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "mockagen schema: unexpected argument %q\n", fs.Arg(0))
 		return 2
+	}
+	// Missing flags are questions on the screen, not usage errors, so
+	// this returns before the checks below. A script without -tui still
+	// hits those checks.
+	if tui {
+		return runSchemaTUI(dialect, dsn, outPath, renderPath, stderr)
 	}
 
 	// The flag wins, then this tool's own variable, then the generic

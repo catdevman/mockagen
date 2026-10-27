@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/catdevman/mockagen/internal/tui/schemaui"
 )
 
 func TestSchemaUsage(t *testing.T) {
@@ -106,6 +108,116 @@ func TestSplitTable(t *testing.T) {
 		}
 		if schemaName != tc.schema || name != tc.name {
 			t.Errorf("split %s %q = %q.%q, want %q.%q", tc.dialect, tc.table, schemaName, name, tc.schema, tc.name)
+		}
+	}
+}
+
+func TestSchemaTUIMissingFlagsOpenTheScreen(t *testing.T) {
+	t.Setenv("MOCKAGEN_DSN", "")
+	t.Setenv("DATABASE_URL", "")
+	var got schemaui.Session
+	prev := runSchemaScreen
+	t.Cleanup(func() { runSchemaScreen = prev })
+	runSchemaScreen = func(sess schemaui.Session) error {
+		got = sess
+		return nil
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runSchema([]string{"-tui"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "required") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+	if got.Services.Tables == nil || got.Services.Inspect == nil || got.Services.Preview == nil {
+		t.Fatal("services were not wired")
+	}
+	if got.EnvDSN != "" || got.EnvName != "" {
+		t.Fatalf("env = %s %q", got.EnvName, got.EnvDSN)
+	}
+}
+
+func TestSchemaTUIKeepsFlagsAndEnv(t *testing.T) {
+	t.Setenv("MOCKAGEN_DSN", "")
+	t.Setenv("DATABASE_URL", "postgres://from-env/db")
+	var got schemaui.Session
+	prev := runSchemaScreen
+	t.Cleanup(func() { runSchemaScreen = prev })
+	runSchemaScreen = func(sess schemaui.Session) error {
+		got = sess
+		return nil
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"-tui", "-dialect", "postgresql", "-dsn", "postgres://app@localhost/db", "-o", "users.schema.yaml"}
+	if code := runSchema(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr.String())
+	}
+	if got.Dialect != "postgres" || got.DSN != "postgres://app@localhost/db" {
+		t.Fatalf("session dialect %q dsn %q", got.Dialect, got.DSN)
+	}
+	if got.EnvName != "DATABASE_URL" || got.EnvDSN != "postgres://from-env/db" {
+		t.Fatalf("env %s %q", got.EnvName, got.EnvDSN)
+	}
+	if got.OutPath != "users.schema.yaml" {
+		t.Fatalf("out = %q", got.OutPath)
+	}
+}
+
+func TestSchemaTUIBadDialectStillExits(t *testing.T) {
+	called := false
+	prev := runSchemaScreen
+	t.Cleanup(func() { runSchemaScreen = prev })
+	runSchemaScreen = func(schemaui.Session) error {
+		called = true
+		return nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := runSchema([]string{"-tui", "-dialect", "oracle"}, &stdout, &stderr)
+	if code != 2 || called {
+		t.Fatalf("code %d called %v stderr %s", code, called, stderr.String())
+	}
+}
+
+func TestSampleQuery(t *testing.T) {
+	cases := []struct {
+		dialect string
+		table   string
+		cols    []string
+		want    string
+	}{
+		{
+			dialect: "postgres",
+			table:   "public.users",
+			cols:    []string{"email"},
+			want:    `SELECT "email" AS "c0" FROM "public"."users" LIMIT 5`,
+		},
+		{
+			dialect: "mysql",
+			table:   "app.users",
+			cols:    []string{"email"},
+			want:    "SELECT `email` AS `c0` FROM `app`.`users` LIMIT 5",
+		},
+		{
+			dialect: "mssql",
+			table:   "dbo.users",
+			cols:    []string{"email", "id"},
+			want:    "SELECT TOP (5) [email] AS [c0], [id] AS [c1] FROM [dbo].[users]",
+		},
+		{
+			dialect: "sqlite",
+			table:   "main.widgets",
+			cols:    []string{"email"},
+			want:    `SELECT "email" AS "c0" FROM "main.widgets" LIMIT 5`,
+		},
+	}
+	for _, tc := range cases {
+		got, err := sampleQuery(tc.dialect, tc.table, tc.cols)
+		if err != nil {
+			t.Errorf("%s: %v", tc.dialect, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s:\n got %s\nwant %s", tc.dialect, got, tc.want)
 		}
 	}
 }

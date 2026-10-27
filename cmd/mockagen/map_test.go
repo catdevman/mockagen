@@ -131,6 +131,74 @@ columns:
 	}
 }
 
+func TestMapFixedLayout(t *testing.T) {
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "people.schema.yaml")
+	dataPath := filepath.Join(dir, "people.fixed")
+	outPath := filepath.Join(dir, "out.map.yaml")
+	mapPath := filepath.Join(dir, "people.map.yaml")
+	schemaYAML := []byte(`version: mockagen/v1
+kind: Schema
+name: people
+columns:
+  - name: name
+    sql_type: text
+`)
+	if err := os.WriteFile(schemaPath, schemaYAML, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, []byte("Ann   NY  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"-schema", schemaPath, "-data", dataPath, "-out", outPath}
+	if code := runMap(args, &stdout, &stderr); code != 1 {
+		t.Fatalf("code = %d, stderr %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "source.fixed") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+
+	mapYAML := []byte(`version: mockagen/v1
+kind: FieldMap
+name: people-import
+source:
+    format: fixed
+    has_header: false
+    encoding: utf-8
+    fixed:
+        - name: name
+          start: 1
+          end: 6
+        - name: city
+          start: 7
+          end: 10
+fields:
+    - target: name
+      source: name
+unmapped:
+    source: ignore
+on_error: abort
+`)
+	if err := os.WriteFile(mapPath, mapYAML, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	args = []string{"-schema", schemaPath, "-data", dataPath, "-map", mapPath, "-out", outPath}
+	if code := runMap(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, stderr %s", code, stderr.String())
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "start: 1") || !strings.Contains(string(got), "end: 10") {
+		t.Fatalf("layout was dropped:\n%s", got)
+	}
+}
+
 func TestMapCommandHelpMentionsTUI(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := runMap([]string{"-help"}, &stdout, &stderr); code != 0 {

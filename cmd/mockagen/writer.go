@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/catdevman/mockagen/pkg/importer"
 	"github.com/catdevman/mockagen/pkg/mockagen"
 	"github.com/catdevman/mockagen/pkg/mockagen/sqlgen"
 	fixed "github.com/ianlopshire/go-fixedwidth"
@@ -36,6 +37,12 @@ type recordWriter interface {
 // newRecordWriter builds the recordWriter for config.FileFormat. Every format
 // but parquet shares one opened file; parquet manages its own internally.
 func newRecordWriter(config mockagen.MockagenConfig, structArr []reflect.StructField, outputFile string) (recordWriter, error) {
+	// FileFormats is the list a new format has to join before this
+	// switch grows a case. A name that is not on it is rejected here,
+	// so the switch's default is not the only gate.
+	if !listedFormat(config.FileFormat) {
+		return nil, fmt.Errorf("unsupported file_format %q", config.FileFormat)
+	}
 	switch config.FileFormat {
 	case "json":
 		f, err := os.Create(outputFile)
@@ -92,6 +99,18 @@ func newRecordWriter(config mockagen.MockagenConfig, structArr []reflect.StructF
 	default:
 		return nil, fmt.Errorf("unsupported file_format %q", config.FileFormat)
 	}
+}
+
+// listedFormat reports whether name is one of FileFormats. The match is
+// case-sensitive because the switch below is, and a second spelling
+// would be a format the readers do not open.
+func listedFormat(name string) bool {
+	for _, format := range importer.FileFormats() {
+		if format == name {
+			return true
+		}
+	}
+	return false
 }
 
 // fluentTag picks the tag the "fluent" format stamps on every line:

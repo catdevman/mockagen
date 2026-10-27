@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
@@ -78,9 +79,9 @@ func (s *SliceSource) Width() (int, error) {
 }
 
 // OpenSource opens path as the format spec names. csv and tsv are delimited
-// text. json is one array; jsonl is one object per line. Other formats are
-// a later task, and an encoding other than utf-8 is refused rather than
-// misread.
+// text. json is one array; jsonl is one object per line. yaml, fixed,
+// fluent, and parquet are the other readers. sql is write-only. An encoding
+// other than utf-8 is refused rather than misread.
 func OpenSource(path string, spec SourceSpec) (Source, error) {
 	if spec.Encoding != "" && !strings.EqualFold(spec.Encoding, "utf-8") && !strings.EqualFold(spec.Encoding, "utf8") {
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedEncoding, spec.Encoding)
@@ -107,18 +108,73 @@ func newSource(f *os.File, spec SourceSpec) (Source, error) {
 			format = "jsonl"
 		case ".tsv":
 			format = "tsv"
+		case ".yaml", ".yml":
+			format = "yaml"
+		case ".log":
+			format = "fluent"
+		case ".fixed":
+			format = "fixed"
+		case ".parquet":
+			format = "parquet"
 		default:
 			format = "csv"
 		}
+	}
+	if WriteOnlyFormat(format) {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, format)
 	}
 	switch format {
 	case "csv", "tsv":
 		return openCSV(f, spec, format)
 	case "json", "jsonl":
 		return openJSON(f, spec, format == "json")
+	case "yaml":
+		return openYAML(f)
+	case "fixed":
+		return openFixed(f, spec)
+	case "fluent":
+		return openFluent(f)
+	case "parquet":
+		return openParquet(f)
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, spec.Format)
+		name := spec.Format
+		if name == "" {
+			name = format
+		}
+		return nil, fmt.Errorf("%w: %s", ErrUnknownFormat, name)
 	}
+}
+
+// readLine reads one record line into buf, dropping the trailing newline
+// and one CR. Fixed-width compares the remainder to the layout width, and
+// a fluent JSON object would not parse with the CR still attached. The
+// result aliases buf and is invalid after the next call that reuses it.
+func readLine(br *bufio.Reader, buf []byte) ([]byte, error) {
+	buf = buf[:0]
+	for {
+		frag, err := br.ReadSlice('\n')
+		buf = append(buf, frag...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err == io.EOF {
+			if len(buf) == 0 {
+				return nil, io.EOF
+			}
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		break
+	}
+	if len(buf) > 0 && buf[len(buf)-1] == '\n' {
+		buf = buf[:len(buf)-1]
+	}
+	if len(buf) > 0 && buf[len(buf)-1] == '\r' {
+		buf = buf[:len(buf)-1]
+	}
+	return buf, nil
 }
 
 func extOf(path string) string {

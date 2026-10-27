@@ -57,6 +57,11 @@ func Propose(sch schema.Schema, sample Sample, base *FieldMap) FieldMap {
 		}
 		out.Fields = append([]Field(nil), base.Fields...)
 		out.Omitted = append([]string(nil), base.Omitted...)
+		// The sample carries names, not positions. Fixed is the only
+		// copy of the layout; dropping it makes the next open fail.
+		if len(base.Source.Fixed) > 0 {
+			out.Source.Fixed = append([]FixedCol(nil), base.Source.Fixed...)
+		}
 	}
 
 	taken := map[string]bool{}

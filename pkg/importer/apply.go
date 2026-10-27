@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"time"
 	"unicode"
 	"unicode/utf8"
 	"unsafe"
@@ -244,6 +245,12 @@ func (p *Plan) writeCanon(dst *Record, i int, col schema.Column, canon string) e
 
 func (p *Plan) evalBytes(b *binding, src, dst *Record, i int) error {
 	kind := b.kind
+	// Typed cells used to fall through cell and become NULL. The copy
+	// has to happen before the byte chain, which is also where null_if
+	// matches text sentinels that a number does not have.
+	if idx, ok := typedIndex(b, src); ok {
+		return p.copyTyped(b, src, dst, i, idx)
+	}
 	if originOf(b.field) == originCoalesce {
 		return p.evalCoalesce(b, src, dst, i, kind)
 	}
@@ -518,7 +525,10 @@ func (p *Plan) cell(src *Record, idx int) ([]byte, bool, error) {
 		return nil, true, nil
 	}
 	if src.Values[idx].Kind != KindText && src.Values[idx].Kind != KindRaw {
-		return nil, true, nil
+		// NULL here is what turned a parquet int into a database NULL.
+		// Coalesce and join have no typed copy, so they fail the row
+		// instead of dropping the value.
+		return nil, false, fmt.Errorf("importer: typed value is not text")
 	}
 	b := src.Bytes(idx)
 	if b == nil {
@@ -610,6 +620,84 @@ func checkEnum(col schema.Column, canon []byte) error {
 		return nil
 	}
 	return fmt.Errorf("%q is not an allowed value", unsafeString(canon))
+}
+
+// typedIndex reports the slot of a single-source cell that is not text.
+// Null, text, and raw stay on the byte chain: null_if and trim match
+// characters, and an integer that arrived as digits still has to be
+// parsed. The check stays here, off copyTyped, so the steady-state plan
+// (trim of text, then an integer that is still text) does not call into
+// the error paths.
+func typedIndex(b *binding, src *Record) (int, bool) {
+	f := &b.field
+	if f.Source == "" || f.Constant != nil || f.Object != nil || f.Join != nil ||
+		len(f.Sources) != 0 || len(f.Coalesce) != 0 || len(b.idx) != 1 {
+		return 0, false
+	}
+	idx := b.idx[0]
+	if idx < 0 || idx >= len(src.Values) {
+		return 0, false
+	}
+	switch src.Values[idx].Kind {
+	case KindNull, KindText, KindRaw:
+		return 0, false
+	default:
+		return idx, true
+	}
+}
+
+// copyTyped stores a typed cell without coercing it through text.
+// Transforms are string operations, and stringifying an int would make
+// the SQL sink quote it. checkNumeric still runs: a precision limit is
+// a property of the column, not of how the digits were spelled. An
+// instant skips the enum check, because the allowed values are
+// spellings and KindTime has already dropped the offset.
+func (p *Plan) copyTyped(b *binding, src, dst *Record, i, idx int) error {
+	if len(b.field.Transforms) > 0 {
+		return fmt.Errorf("importer: transforms do not apply to a typed value")
+	}
+	vk := src.Values[idx].Kind
+	if vk != b.kind {
+		return fmt.Errorf("importer: value kind %s does not match column kind %s",
+			kindName(vk), kindName(b.kind))
+	}
+	switch vk {
+	case KindInt:
+		n := src.Int(idx)
+		p.scratch = strconv.AppendInt(p.scratch[:0], n, 10)
+		if err := checkNumeric(unsafeString(p.scratch), b.col); err != nil {
+			return err
+		}
+		if err := checkEnum(b.col, p.scratch); err != nil {
+			return err
+		}
+		dst.SetInt(i, n)
+	case KindFloat:
+		f := src.Float(idx)
+		p.scratch = strconv.AppendFloat(p.scratch[:0], f, 'f', -1, 64)
+		if err := checkNumeric(unsafeString(p.scratch), b.col); err != nil {
+			return err
+		}
+		if err := checkEnum(b.col, p.scratch); err != nil {
+			return err
+		}
+		dst.SetFloat(i, f)
+	case KindBool:
+		on := src.Bool(idx)
+		word := "false"
+		if on {
+			word = "true"
+		}
+		if err := checkEnum(b.col, unsafeBytes(word)); err != nil {
+			return err
+		}
+		dst.SetBool(i, on)
+	case KindTime:
+		dst.SetTime(i, time.Unix(0, src.Int(idx)).UTC())
+	default:
+		return fmt.Errorf("importer: typed value is not text")
+	}
+	return nil
 }
 
 func parseIntBytes(b []byte) (int64, error) {

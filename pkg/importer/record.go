@@ -28,6 +28,32 @@ const (
 	KindBinary
 )
 
+// kindName is the word an error uses for k. Kind's numeric value would
+// say "2 does not match 4", which does not tell a bool from an int, and
+// stringifying the cell would hide the mismatch the caller is reporting.
+func kindName(k Kind) string {
+	switch k {
+	case KindNull:
+		return "null"
+	case KindText:
+		return "text"
+	case KindInt:
+		return "int"
+	case KindFloat:
+		return "float"
+	case KindBool:
+		return "bool"
+	case KindTime:
+		return "time"
+	case KindRaw:
+		return "raw"
+	case KindBinary:
+		return "binary"
+	default:
+		return "unknown"
+	}
+}
+
 // Value is one field of one row. Text is not stored here: it lives in the
 // owning Record's arena, located by off and ln, because a slice into that
 // arena would be invalidated by the append that grows it.

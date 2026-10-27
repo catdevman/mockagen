@@ -362,41 +362,66 @@ Not started. T2.2's four origins stay as they are until this task.
 
 ## Phase 3 - the rest
 
+Decisions that replace the earlier sketch are in
+[import-tooling.md](import-tooling.md) under *Reading what mockagen writes*,
+*`mockagen schema`*, and *`mockagen map`*. The short form:
+
+- Readers stay in `pkg/importer` behind `OpenSource`. There is no
+  `pkg/mockagen/reader`.
+- `sql` is the only write-only `file_format`. The list lives next to the
+  readers. `newRecordWriter` rejects a name that is not on it, so a new
+  format has to be added there and then given a reader or marked write-only.
+- A typed parquet value whose kind matches the column is copied. It is not
+  parsed, and `cell` must not treat it as NULL. A chain on that field is a
+  row error. String, decimal, and civil-date columns stay on the text path.
+- Fixed positions are `source.fixed` (`name`, `start`, `end`), 1-based and
+  inclusive. The importer slices the line. It does not call `go-fixedwidth`.
+- The schema screen gets an injected preview func. Unresolved columns are not
+  handed to the generator. Connections store `password_env`, never a password,
+  and a DSN that already contains one is refused.
+- The map check screen runs the sample through `Run` and a discarding sink
+  when compile is clean, and does not run when it is not. The editor shows
+  `importer.Stages`. The sniffed source line on the board is the source
+  setup; there is no second delimiter pass.
+
 ### T3.1 - remaining readers
 
-yaml, fixed, fluent, parquet sources, plus the meta-test that every
-`file_format` either has a reader or is on an explicit write-only list. Parquet
-arrives already typed and bypasses coercion - say so in its doc comment.
+yaml, fixed, fluent, and parquet sources, plus the meta-test. Parquet's doc
+comment says which values arrive typed and bypass coercion.
+
+Done when a round trip through the writer matches for yaml, fixed, fluent,
+and parquet; a typed parquet integer is not parsed and a `trim` on it fails;
+a fixed line of the wrong width is a row error; `sql` is rejected by
+`OpenSource` and accepted by the writer; every other `file_format` is accepted
+by both.
 
 ### T3.2 - `internal/tui/schemaui`
 
 Design: *`mockagen schema`*.
 
-Five screens over the finished command: connect, pick a table, map columns,
-preview, save. **No I/O in `Update`** - every query is a `tea.Cmd` returning a
-message. A saved connection stores the *name* of the environment variable
-holding the password, never the password.
+Five screens: connect, pick a table, map columns, preview, save. **No I/O in
+`Update`.** Every dial, query, and write is a `tea.Cmd`. A saved connection
+stores the name of the environment variable holding the password.
 
-Done when model tests feed message sequences and assert state with no terminal,
-database or file involved; `View()` is asserted against inline golden strings
-with a fixed color profile and a leading `tea.WindowSizeMsg` set in `TestMain`.
-Do not add `teatest`.
+Done when model tests feed message sequences and assert state with no
+terminal, database, or file; `View()` is asserted against inline strings under
+an Ascii profile set in `TestMain`, with a leading `tea.WindowSizeMsg`. One
+command test may use a temp file to prove a saved connection has no password
+in it. Do not add `teatest`.
 
 ### T3.3 - `internal/tui/mapui`
 
 Design: *`mockagen map`*.
 
-Source setup, mapping board, transform editor, validate, save. The preview and
-validate panes are `Options.Limit` and `Options.SampleRows` against a discarding
-sink - they must not reimplement any mapping logic. Call `Propose`, `Compile`,
-and `Run`. A `NOT NULL` target with no default, no identity, and no mapping
-renders as a blocker. `o` moves a legal target to `omitted`. The transform
-editor shows the chain and then `null_if`, coercion, `default`, and the schema
-checks, with the sample values beside them. `s` writes and stays. `q` quits,
-and asks when the map is dirty since the last save. A missing file flag opens
-the bubbles file picker before the board. A bad file stays on the picker.
-`s` there skips an existing map. The object editor for a `json` or `jsonb`
-column arrives with [T2.6](#t26---object-origin). This screen does not grow
-a key list of its own.
+The preview and the check screen are `Options.Limit` and `Options.SampleRows`
+against a discarding sink when the plan is clean. They call `Propose`,
+`Compile`, and `Run`. A `NOT NULL` target with no default, no identity, and no
+mapping renders as a blocker. `o` moves a legal target to `omitted`. The
+transform editor shows the chain and then `null_if`, coercion, `default`, and
+the schema checks, with the sample beside them, via `Stages`. `s` writes and
+stays. `q` quits, and asks when the map is dirty since the last save. A
+missing file flag opens the bubbles file picker before the board. A bad file
+stays on the picker. `s` there skips an existing map. The object editor does
+not grow a key list. `boardHelpKeys` stays as it is.
 
 Tested as T3.2 is.

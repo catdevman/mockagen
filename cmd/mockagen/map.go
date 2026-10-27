@@ -52,7 +52,6 @@ func runMap(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var sch schema.Schema
-	var sample importer.Sample
 	if schemaPath != "" {
 		loaded, err := schema.Load(schemaPath)
 		if err != nil {
@@ -61,15 +60,9 @@ func runMap(args []string, stdout, stderr io.Writer) int {
 		}
 		sch = loaded
 	}
-	if dataPath != "" {
-		read, err := importer.ReadSample(dataPath, sampleN)
-		if err != nil {
-			fmt.Fprintf(stderr, "mockagen map: %v\n", err)
-			return 1
-		}
-		sample = read
-	}
-
+	// The map is loaded before the sample. A fixed-width layout lives
+	// on source.fixed, and sampling first would have to guess columns
+	// the file does not name.
 	var base *importer.FieldMap
 	if mapPath != "" {
 		loaded, err := importer.Load(mapPath)
@@ -78,9 +71,23 @@ func runMap(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		base = &loaded
-		if dataPath != "" && !importer.HeaderMatches(loaded.Source, sample) {
-			return reportHeaderDrift(outPath, stdout, stderr, loaded, sample)
+	}
+
+	var sample importer.Sample
+	if dataPath != "" {
+		var spec *importer.SourceSpec
+		if base != nil {
+			spec = &base.Source
 		}
+		read, err := importer.ReadSampleSpec(dataPath, spec, sampleN)
+		if err != nil {
+			fmt.Fprintf(stderr, "mockagen map: %v\n", err)
+			return 1
+		}
+		sample = read
+	}
+	if base != nil && dataPath != "" && !importer.HeaderMatches(base.Source, sample) {
+		return reportHeaderDrift(outPath, stdout, stderr, *base, sample)
 	}
 
 	if tui {

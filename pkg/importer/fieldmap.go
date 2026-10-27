@@ -35,14 +35,28 @@ type FieldMap struct {
 // the header Propose saw. Import compares a later file to that list before
 // reading a row, so a swapped pair fails at open instead of loading values
 // into the wrong columns. A headerless file stores Indexes and leaves Fields
-// empty; the numbers are the only names those columns have.
+// empty; the numbers are the only names those columns have. Fixed is the
+// column layout of a fixed-width file, which the writer keeps only as
+// struct tags.
 type SourceSpec struct {
-	Format    string   `yaml:"format" json:"format"`
-	HasHeader bool     `yaml:"has_header" json:"has_header"`
-	Delimiter string   `yaml:"delimiter,omitempty" json:"delimiter,omitempty"`
-	Encoding  string   `yaml:"encoding,omitempty" json:"encoding,omitempty"`
-	Fields    []string `yaml:"fields,omitempty,flow" json:"fields,omitempty"`
-	Indexes   []int    `yaml:"indexes,omitempty,flow" json:"indexes,omitempty"`
+	Format    string     `yaml:"format" json:"format"`
+	HasHeader bool       `yaml:"has_header" json:"has_header"`
+	Delimiter string     `yaml:"delimiter,omitempty" json:"delimiter,omitempty"`
+	Encoding  string     `yaml:"encoding,omitempty" json:"encoding,omitempty"`
+	Fields    []string   `yaml:"fields,omitempty,flow" json:"fields,omitempty"`
+	Indexes   []int      `yaml:"indexes,omitempty,flow" json:"indexes,omitempty"`
+	Fixed     []FixedCol `yaml:"fixed,omitempty" json:"fixed,omitempty"`
+}
+
+// FixedCol is one column of a fixed-width file. Start and End are
+// 1-based and inclusive, the same numbers the writer stores as
+// start_position and end_position. They live on the source because the
+// writer's positions are struct tags, and go-fixedwidth ignores a tag
+// it cannot parse.
+type FixedCol struct {
+	Name  string `yaml:"name" json:"name"`
+	Start int    `yaml:"start" json:"start"`
+	End   int    `yaml:"end" json:"end"`
 }
 
 // UnmappedPolicy says what a source column with no target means. Target

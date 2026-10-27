@@ -121,6 +121,8 @@ var (
 	ErrUnsupportedEncoding = errors.New("importer: encoding is not utf-8")
 
 	// ErrUnknownFormat means source.format is not one this package reads.
-	// yaml, fixed, fluent, and parquet are later tasks.
+	// sql is write-only: an INSERT file is not a row source, and reading
+	// it back would be a SQL parser. tsv and jsonl are readers, but they
+	// are not file_format names.
 	ErrUnknownFormat = errors.New("importer: unsupported source format")
 )

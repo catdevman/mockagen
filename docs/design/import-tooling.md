@@ -437,17 +437,19 @@ Six of the seven output formats invert cleanly. The seventh, `sql`, does not:
 reading it back means parsing `INSERT` statements, which is a SQL parser's job.
 Bulk mode's output is a CSV, so that half round-trips anyway.
 
-None of the readers adds a dependency and all of them stream -
-`fixedwidth.NewDecoder`, `parquet.NewGenericReader`, `yaml.NewDecoder` and
-`encoding/json/v2` are already in the module and already incremental. They are
-not all equally urgent, though:
+No reader adds a dependency. `yaml.v3` and `parquet-go` are already in the
+module; fixed-width positions are sliced in the importer rather than decoded
+with `go-fixedwidth`. That library ignores a tag it cannot parse, which is the
+failure the writer already guards against, and the map's positions are data,
+not struct tags. `sql` stays write-only: reading it back is a SQL parser.
 
-| Format | When |
+| Format | Reader |
 |---|---|
-| csv / tsv, json / jsonl | v1. This is what real source data arrives as |
-| fixed | v1 if fixed-width input is wanted; its column offsets live in the FieldMap `source` block, which is a different shape from the writer's `fixed` struct tags |
-| yaml, fluent | Follow-on. Cheap, and nobody's legacy extract is a YAML sequence |
-| parquet | Follow-on, and the odd one: Parquet arrives already typed, so it skips the coercion story that is most of the point of this package |
+| csv / tsv, json / jsonl | v1. Text cells. JSON numbers keep their literal spelling |
+| yaml | One sequence of mappings, or a stream of mapping documents. A scalar's `yaml.Node.Value` is the cell, so `01` is not rewritten before coercion |
+| fluent | `timestamp`, tag, JSON object, separated by tabs. The object is the row. The prefix is not a column |
+| fixed | `source.fixed` is `{name, start, end}`, 1-based and inclusive, the same numbers as the writer's positions and a different shape. A line whose length is not the layout width is a row error. The reader does not strip pad |
+| parquet | Physical boolean, integer, float, and timestamp values are stored as that `Kind`. Apply copies a value whose kind already matches the column and does not parse it. A text chain on that field is a row error. UTF-8 and decimal columns stay text, because a float would drop scale. A date is civil text (`2006-01-02`), not an instant |
 
 ## What has to change in mockagen first
 
@@ -459,7 +461,7 @@ everything else leans on it.
 |---|---|
 | **`pkg/mockagen/types`**: promote the type catalog | Both TUIs have to offer the valid generator types and reject a typo. Half the list is `mapToFaker` in [`main.go`](../../cmd/mockagen/main.go), which nothing can import, and an unknown type does not error - it silently generates a random string, which matters tenfold once a *tool* writes the spec. The catalog carries more than a faker tag: what kind of value the type produces, which of `values`/`min`/`max`/`format` it needs, and an **`SQLAffinity`** (text/int/float/bool/time/binary) plus name hints - because inference needs the *reverse* mapping, sql type → candidate types, and without it the rules hardcode a second parallel table that will drift |
 | **`pkg/mockagen/sqlgen`**: extract the dialect, *not* the writers | The importer needs the four dialects' hard-won correctness - MySQL's backslash and CR handling, mssql's `N''` prefix, the per-dialect bulk loaders. That is ~250 lines: `sqlDialect`, the alias table, `lookupSQLDialect`, `appendIdent`/`appendQualifiedIdent`/`appendString`/`identList`, `bulkLoadScript`, `maxRowsPerStatement`. The writers stay put; see below |
-| **`pkg/mockagen/reader`** | The inverse of the writers, sequenced as above |
+| **Readers on `Source`** | The inverse of the writers, in `pkg/importer` behind `OpenSource`. See *Reading what mockagen writes* |
 | **An error-returning loader with `kind` dispatch** | [`LoadConfig`](../../pkg/mockagen/load_config.go) panics on every failure path and returns no error. A panic inside a bubbletea update loop takes the terminal's cooked mode with it. The existing function keeps its behaviour - tests pin the panics - and delegates to one that returns an error, a kind, and rejects a type the catalog does not know |
 | **Subcommand CLI** | Four commands where there is one flag today |
 
@@ -527,11 +529,12 @@ Three papercuts are in the new commands' way:
 ```
 pkg/mockagen/types       generator-type catalog, with SQLAffinity
 pkg/mockagen/sqlgen      the four SQL dialects, identifier and value escaping
-pkg/mockagen/reader      csv/json first; yaml/fixed/fluent/parquet after
 pkg/schema               the Schema kind: types, load/save, render, infer.go
 pkg/schema/introspect    one Querier interface, per-dialect catalog queries
                          (written and verified: introspection-queries.md)
-pkg/importer             Source, Record, Plan, Sink, Report
+pkg/importer             Source, Record, Plan, Sink, Report. Readers are
+                         Sources behind OpenSource. A separate reader package
+                         would split that dispatch, so there is not one.
 internal/dbtest          the container harness, extracted from integration_test
 internal/tui/schemaui    bubbletea app for `mockagen schema`
 internal/tui/mapui       bubbletea app for `mockagen map`
@@ -556,18 +559,47 @@ mockagen schema -dialect postgres -dsn "$DATABASE_URL" -table public.users \
 That is what CI, scripts and the introspection integration tests use, and it is
 what the TUI calls.
 
-The TUI is five screens over it. **Connect**: dialect, then a DSN - typed, from
-`$MOCKAGEN_DSN` or `$DATABASE_URL`, or from
-`~/.config/mockagen/connections.yaml`, where a saved connection stores *the name
-of the environment variable* holding the password and never the password itself;
-this file ends up in a dotfiles repo. **Pick a table**: a filterable list with
-approximate row counts, multi-select writing one file per table. **Map columns**:
-one row per column - name, SQL type, nullable, key markers, chosen type, a live
-sample - with unresolved columns in a colour that hurts, because they are the
-reason to be on this screen; `e` opens a fuzzy type picker that then prompts for
-whatever that type needs, driven by the catalog's metadata rather than a switch
-per type. **Preview**: records from the real generator, not a mock-up.
-**Save**: the schema file, and optionally the rendered spec beside it.
+The TUI is five screens over it, started with `-tui`. Without that flag the
+command is unchanged, so a script never opens a screen.
+
+**Connect.** Dialect, then a typed DSN, `$MOCKAGEN_DSN`, `$DATABASE_URL`, or a
+saved connection. The file is `~/.config/mockagen/connections.yaml` and the path
+is injected so a test never reads the real home directory:
+
+```yaml
+connections:
+  - name: local
+    dialect: postgres
+    dsn: postgres://app@localhost:5432/app
+    password_env: MOCKAGEN_DB_PASSWORD
+```
+
+`password_env` is the variable's name. The password is read only inside the
+connect command and spliced into the DSN for that dial. Saving refuses a DSN
+that already has a password (`user:pass@` or a `password=` parameter). A
+`password` key in the file fails to load. SQLite has no password.
+
+**Pick a table.** `introspect.Tables` already returns the list and the
+approximate count. The filter is local. Space multi-selects. One file is
+written per selected table.
+
+**Map columns.** One row per column. Unresolved columns use the bad style.
+`e` opens the catalog picker: `types.Candidates` for the column's affinity,
+then the rest of `types.All`. Prompts for `values`, `min`, `max`, and `format`
+come from those fields on `types.Type`, not from the type's name. A picked
+type sets `inferred_by: user`. The live sample is a `tea.Cmd` that returns
+rows; the screen does not infer types from them.
+
+**Preview.** Another command, injected by `cmd/mockagen`, draws a few rows
+from `generateFakes`. An unresolved column is shown as `UNRESOLVED` and is not
+passed to the generator, which would otherwise emit a random string and look
+successful. The generator stays in `package main`.
+
+**Save.** Schema path, and an optional rendered spec. The write is a command.
+
+No query, dial, or file read runs in `Update`. Model tests feed messages.
+`TestMain` pins an Ascii color profile; the first `Update` in a view test is
+a `tea.WindowSizeMsg`, because the model does not exist during `TestMain`.
 
 ### Inference
 
@@ -624,11 +656,12 @@ stays on that picker with the error. `q` cancels and writes nothing. Without
 `-tui`, a missing required flag is still exit 2, so a script never opens a
 screen.
 
-**Source setup.** The sniffed format and its options - delimiter, quote, header,
-encoding, record path for JSON, column offsets for fixed-width - over a live
-preview of the raw first rows, so a wrong delimiter is visible rather than
-inferred from a confusing error later. The header that preview shows is what
-lands in `source.fields`.
+**Source setup.** The board already shows the sniffed format, delimiter,
+encoding, and field names. That is the setup screen. A second control for
+delimiter, quote, or encoding is not added: the sample is one read, and
+re-parsing under the screen is the second pass this command avoids. Fixed-width
+positions are `source.fixed` in the map. Sampling a `.fixed` file without them
+fails with that reason instead of guessing columns.
 
 **The mapping board.** Source fields on the left, each with a profile computed
 in one bounded pass over the sample: inferred type, null rate, a capped distinct
@@ -654,17 +687,21 @@ Re-opening with `-map` after `mockagen schema -update` is the drift view: a new
 column is unseen, a renamed column is a stale target, and `omitted` survives.
 Propose fills only the unseen columns.
 
-**The transform editor.** The chain for one field, then the four steps after it
-(`null_if`, coercion, `default`, the schema checks), with the first N source
-rows and their transformed values beside it. Errors sit inline per row. Chain
-validity is checked against each transform's accepts/produces kinds as you
-build it.
+**The transform editor.** The chain for one field, then `null_if`, coercion,
+`default`, and the schema checks. `importer.Stages` runs those steps with the
+same functions as `Apply` and returns each one, so the screen can show the
+sample beside them without a second mapper. Errors sit on the step that
+failed. The chain is not checked against a separate accepts/produces table:
+the only typed values that skip it are parquet physical types, and a chain on
+one of those is already a row error.
 
-**Validate.** The whole file, or the first N rows, through the real pipeline with
-a discarding sink. Errors histogrammed by field and reason, with sample offending
-rows and their line numbers. Fourteen unparseable dates are a thing to find here,
-not after a half-loaded table. A header that no longer matches `source.fields`
-fails before the first row.
+**Validate.** When `Compile` returns no diagnostics, the check screen and the
+board's preview are one `Run` of the in-memory sample through a discarding
+sink, with `Limit` and `SampleRows` set to that sample. Errors are counted by
+field and reason, with the line numbers `Report` already carries. A plan with
+a diagnostic is not run, which is the same rule as `mockagen import`. The
+editor can still show `Stages` for the one field being edited. The sample is
+not re-read from disk: a second pass could observe a file that changed.
 
 That is also why the importer is built first. These two panes are not a
 reimplementation of the import logic - they are `Options.Limit` and
