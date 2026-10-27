@@ -85,16 +85,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		return 1
 
 	case "map":
-		mapFs := flag.NewFlagSet("map", flag.ContinueOnError)
-		mapFs.SetOutput(stderr)
-		if err := mapFs.Parse(args[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return 0
-			}
-			return 2
-		}
-		fmt.Fprintln(stderr, "mockagen: map command not yet implemented")
-		return 1
+		return runMap(args[1:], stdout, stderr)
 
 	case "import":
 		importFs := flag.NewFlagSet("import", flag.ContinueOnError)

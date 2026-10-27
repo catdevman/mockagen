@@ -643,6 +643,16 @@ exact: postgres hands them back unescaped, one per row, and mysql needs only the
 quote-aware split. Prefer the enum path and treat CHECK parsing as the
 best-effort fallback it is.
 
+JSON columns are not another shape to parse. `format_type` on postgres and
+`COLUMN_TYPE` on mysql already return `json` or `jsonb`. The SQL Server
+assembler uses `ty.name`; on the 2022 image that name is never `json`, and a
+document column is `nvarchar` plus a length. A native `json` type, SQL Server
+2025 and Azure SQL, takes the `ELSE ''` branch and is stored as `json`.
+SQLite has no JSON type; the declared type stays `TEXT`. None of these rows
+carry the keys inside the document. `ISJSON`, `JSON_PATH_EXISTS`,
+`JSON_SCHEMA_VALID`, and `jsonb_typeof` are checks the `IN`-list parser does
+not recognise, and it returns no values for them.
+
 Two closing notes. Everything above reads one table; the TUI's table picker uses
 the per-dialect table query, and nothing here needs a cross-table query because
 [a schema file is one table](import-tooling.md#the-pipeline). And none of these

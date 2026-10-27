@@ -159,10 +159,13 @@ enforces the couplings the model would otherwise permit:
 
 - `nullable: false` means `null_percentage` must be 0. The TUI makes it
   unselectable rather than reporting it afterwards.
-- `identity: true` means the column is omitted from the generated spec entirely,
-  and from the importer's `INSERT` column list. Postgres rejects an explicit
-  value for `GENERATED ALWAYS`, and `BULK INSERT` maps fields by position - which
-  the generated bulk script already warns about.
+- `identity: true` means the column is omitted from the generated spec entirely.
+  A field map may not target it either: Propose places it in `omitted`, and the
+  importer leaves it out of the `INSERT` column list. Postgres rejects an
+  explicit value for `GENERATED ALWAYS`, and `BULK INSERT` maps fields by
+  position - which the generated bulk script already warns about.
+- `format` and `type` on a column are generation decisions. The field map does
+  not read them. Coercion uses `sql_type` and the field map's own `format`.
 - `references` and `unique` are facts nothing can honour yet, and the renderer
   must say so out loud rather than quietly emitting a `Word`. See the gap section.
 
@@ -179,18 +182,47 @@ dropped, a `varchar(50)` that is now a `varchar(100)`. Without the marker the
 second run has two options and both are wrong: clobber the hand-tuning, or freeze
 facts that are no longer true.
 
+#### JSON columns
+
+A JSON column is a type name. The catalogs do not store the keys inside the
+document, so the schema file does not grow a key list, a JSON Schema, or a
+place for `address.city`. Introspection copies the spelling the column
+queries already return:
+
+| Engine | What lands in `sql_type` |
+|---|---|
+| PostgreSQL | `json` or `jsonb`, from `format_type`. `jsonb[]` is an array and stays that spelling. It is not a document. |
+| MySQL | `json`, from `COLUMN_TYPE`. |
+| SQL Server 2025 and Azure SQL | `json`, from `sys.types`, with no length suffix. |
+| SQL Server 2016 through 2022 | `nvarchar(max)`. The verified queries ran on `mcr.microsoft.com/mssql/server:2022-latest`, which has JSON functions and no `json` type. |
+| SQLite | `TEXT`. JSON functions do not change the declared type. |
+
+A check written with `ISJSON`, `JSON_PATH_EXISTS`, `JSON_SCHEMA_VALID`, or
+`jsonb_typeof` is unrecognised. The per-dialect check parser returns no
+values, the same way it bails on any expression that is not an `IN` list.
+Sampling the first rows and promoting an `nvarchar` column because those
+rows look like objects is the same guess, and it is not done.
+
+`json` and `jsonb` match no inference rule. Name rules do not fire on them
+either: a `jsonb` column called `email` is a document, not an email address,
+so generation leaves it unresolved. `nvarchar`, including the `nvarchar(max)`
+used as a JSON bag on SQL Server 2022, still matches `type:text`. The field
+map reads `sql_type` either way. Building one document out of several source
+columns is the field map's `object` origin, not a schema fact.
+
 ### `kind: FieldMap`
 
 ```yaml
 version: mockagen/v1
 kind: FieldMap
 name: legacy-users-import
-schema: ./users.schema.yaml      # the target description
+schema: ./users.schema.yaml      # relative to this file
 source:
   format: csv
   has_header: true
   delimiter: ","
   encoding: utf-8
+  fields: [USER_GUID, EMAIL_ADDR, STATUS_CODE, SIGNUP_DT, FIRST, LAST, NICKNAME]
 fields:
   - target: id
     source: USER_GUID
@@ -203,7 +235,6 @@ fields:
     transforms:
       - trim: {}
       - case: lower
-    required: true
 
   - target: status
     source: STATUS_CODE
@@ -215,35 +246,97 @@ fields:
 
   - target: signed_up
     source: SIGNUP_DT
-    format: "01/02/2006"         # the target is a time; this is how to read it
+    format: "01/02/2006"         # parse layout; not the column's format
     null_if: ["", "N/A", "NULL"]
 
   - target: full_name
     sources: [FIRST, LAST]
     join: " "
 
+  - target: first_name
+    coalesce: [NICKNAME, FIRST]
+
   - target: imported_batch
     constant: "2026-10-legacy"
+omitted:
+  - login_count                  # nullable, defaulted, or identity
 unmapped:
   source: ignore                 # ignore | error
-  target: error                  # error | null | default
 on_error: abort                  # abort | skip_row | null_field
 ```
 
-A field draws from one `source`, several `sources`, or a `constant`. Then three
-things happen to it, in this order, and they are deliberately *three different
-mechanisms rather than one chain*:
+`schema` is a path relative to the map file, not the process's working
+directory. An absolute path is used as written. `source.fields` is the header
+Propose saw, in order. A headerless source stores `indexes` instead, and omits
+`fields`. `import` compares a headed file's header to `source.fields` before
+reading a row, and refuses a swap, a rename, or a missing name with both lists
+in the error. A headerless file is checked by width: every stored index must
+fall inside the row.
 
-1. **Coercion** is the target column's type plus a `format` string. The target
-   type is already an introspected fact, so there is nothing to declare: a date
-   column with `format: "01/02/2006"` is read as a date, and
-   `MockagenColumn.Format` already exists to carry it. Spelling that as a
-   `parse_time` → `format_time` pair would be two chain links, two TUI widgets
-   and two validation sites for one concept.
-2. **Null and default policy** is `null_if` and `default` as field options.
-   `coalesce` is not needed - `sources: [a, b, c]` is coalescing.
-3. **String munging** is the ordered chain, because this is the part where order
-   genuinely matters: trim before map, replace before regex.
+A field has one origin: a single `source`, `sources` plus `join`, a `coalesce`
+list, a `constant`, or an `object`. `sources` without `join` is a compile
+error, and so is a field that sets more than one origin. `join` concatenates
+the non-empty parts with the separator, then one chain runs on the result.
+`coalesce` walks the names in order and keeps the first candidate that is
+still non-null after the string chain and `null_if`. There is no `required`
+key. Whether an empty result may be stored is the schema column's
+`nullable`, `default`, and `identity`.
+
+`object` is not implemented. [`Unmarshal`](../../pkg/importer/fieldmap.go)
+rejects the key. It is how several cells become one JSON document, which the
+schema cannot describe. One source cell that is already a whole document
+stays a normal `source`. [`classify`](../../pkg/importer/compile.go) keeps
+`json` and `jsonb` as text, so that cell is stored as the string the chain
+produced and the database checks it on insert.
+
+```yaml
+- target: profile
+  object:
+    city:
+      source: city
+      transforms:
+        - trim: {}
+    email:
+      source: email
+    status:
+      constant: active
+```
+
+Key order in the file is the order emitted. A null leaf is omitted, so a
+blank cell means the key is absent. Each leaf is the normal string chain,
+including `null_if`. The assembled text is parsed once. A constant that is
+not valid JSON fails at compile time, and a row that does not assemble fails
+as a row error. Nested objects use the same shape. The origin is legal on a
+text column too, which is how a pre-2025 SQL Server `nvarchar` column
+receives a document without the schema pretending the type is JSON. The
+mapping screen offers the editor for a `json` or `jsonb` column, and the
+keys are typed, because the schema has none. Keys parsed from a sample cell
+are hints, not facts. Arrays, and a JSON Schema on the column, wait until a
+real file needs them. `object` is an origin, not a seventh transform.
+`expr:` stays reserved.
+
+What happens to the value is five steps, and only the first is a chain. The
+split is the same one Embulk makes. The order is the order a legacy extract
+needs, because the cell is text until it has been cleaned:
+
+1. **String munging**, the ordered chain. Trim before lookup, replace before
+   regex. Each step declares the kind it accepts and the kind it produces, so
+   the chain is checkable before any row is read.
+2. **`null_if`**, matched against that text. `"N/A"` becomes null before a
+   date parse can reject it.
+3. **Coercion**, from the target column's facts: `sql_type`, and `format` on
+   the field as the parse layout for a time. Kind comes from a classifier over
+   `sql_type` (integer, numeric scale, boolean, timestamp, bytea, and text as
+   the remainder). It does not come from the generator type or from
+   `types.SQLAffinity`, and Propose does not copy the column's `type` or
+   `format`. A `format` on a non-time column is a compile error. A `constant`
+   that cannot be coerced is a compile error too.
+4. **`default`**, only when the value is null. A null written for a mapped
+   nullable column stays NULL, which overrides a database default. Omitting the
+   column is how the database default fires.
+5. **Schema checks**, per row: `max_length`, numeric precision and scale, and
+   membership of `enum_values`. A miss is a row error. The same checks on a
+   `constant` run at compile time.
 
 That leaves six transforms, and the set is closed:
 
@@ -263,6 +356,38 @@ and each step has exactly one argument slot to prompt for. Each transform also
 declares what it accepts and produces, so a chain is checkable without reading a
 row, which is what the mapping TUI does as you build it.
 
+When the target column carries `enum_values`, Propose seeds the lookup with the
+legal outputs and no incoming keys:
+
+```yaml
+- map:
+    to: [active, suspended, closed]
+```
+
+`to` with no pairs is an unfinished lookup. The column counts as mapped, so it
+is not a blocker, and the file can be saved. `import` refuses to run it.
+Validate reports every non-null source value as unmapped. Replacing `to` with
+pairs finishes it. The row-time `enum_values` check still applies to whatever
+the lookup emits.
+
+Every schema column is in exactly one of three places:
+
+| Place | Meaning |
+|---|---|
+| `fields` | Mapped. One origin feeds this column |
+| `omitted` | Left out of the `INSERT`. Identity, a database default, or nullable |
+| unseen | In the schema, and in neither list |
+
+A column in neither list is unseen. A `NOT NULL` column with no default and no
+identity is a blocker there. Any other unseen column means the schema grew and
+nobody has classified it yet. A name in `fields` or `omitted` that the schema
+no longer has is **stale**. Compile reports every stale name and every blocker
+in one pass. `mockagen map`
+still writes the file and exits 1, because the file is what the next edit
+fixes. `mockagen import` refuses a plan that is not clean. Re-running with
+`-map` keeps every existing field entry and the `omitted` list, proposes only
+for unseen columns, and does not rewrite a chain a person already edited.
+
 #### Why not an expression language
 
 The honest contender is [`expr-lang/expr`](https://github.com/expr-lang/expr),
@@ -277,8 +402,9 @@ TUI rather than the language:
   at which point the mapping TUI is `$EDITOR` with a validate button and the
   bubbletea dependency bought nothing.
 - **An expression is opaque in the other direction.** "Which source fields does
-  this mapping read?" becomes an AST walk, and that question is what the
-  `unmapped.source` policy and the mapping board's left pane are built on.
+  this mapping read?" becomes an AST walk, and that question is what
+  `unmapped.source` and the mapping board's left pane are built on. The answer
+  has to stay a list of names in `source`, `sources`, and `coalesce`.
 
 So: ship the narrow declarative form, and reserve `expr:` as a
 documented-but-unimplemented key. If real mappings hit the wall, it goes in
@@ -291,12 +417,12 @@ one-way door.
 The shape is borrowed, not invented:
 
 - **Embulk** declares typed columns (`{name, type, format}`) and keeps a short
-  ordered `filters` list separately. That is exactly the coercion/munging split
-  above, and it is the single most useful thing to copy.
-- **pgloader** declares casts *by source type*, not per field. The right model
-  for inference defaults: one `casts:` block saying "every `varchar` gets
-  trimmed" beats forty copies of `- trim: {}`, and it shrinks what the TUI has to
-  generate.
+  ordered `filters` list separately. That split is the one above: a chain, then
+  a type. The order here puts the chain first because the cell arrives as text.
+- **pgloader** declares casts by source type, one block for "trim every
+  varchar". This format does not take that block. A chain lives on the field,
+  so the editor stays a list, and Propose repeats `trim` on a text target
+  rather than hiding a transform in a second place.
 - **Benthos / Redpanda Connect** is the Go precedent for ordered lists of
   single-key YAML maps, including the awkward part: a single-key map needs a
   custom `UnmarshalYAML` and round-trips badly through `map[string]any`, so
@@ -445,11 +571,13 @@ per type. **Preview**: records from the real generator, not a mock-up.
 
 ### Inference
 
-`infer.go` is an ordered rule list. Name rules run before type rules, because a
-`varchar(255)` called `email` is an email address and a `varchar(255)` is nothing
-in particular. Key rules run before both, because uniqueness constrains harder
-than naming. Each rule carries a stable id, which is what lands in
-`inferred_by`:
+`infer.go` is an ordered rule list. Name rules run before type rules, because
+a `varchar(255)` called `email` is an email address and a `varchar(255)` is
+nothing in particular. `json` and `jsonb` are the exception, described under
+*JSON columns*: the type is a document, so name rules do not fire and the
+column stays unresolved. Key rules run before both, because uniqueness
+constrains harder than naming. Each rule carries a stable id, which is what
+lands in `inferred_by`:
 
 | Rule id | Fires on | Chooses |
 |---|---|---|
@@ -464,6 +592,7 @@ than naming. Each rule carries a stable id, which is what lands in
 | `type:timestamp` | `timestamp`, `timestamptz`, `datetime`, `date` | Datetime |
 | `type:numeric` | `numeric(p,s)` | Number, `decimals` from the scale and `min`/`max` from the precision |
 | `type:text` | `text`, `varchar`, `char`, `nvarchar` | Sentence, capped by `max_length` |
+| — | `json`, `jsonb` | unresolved. Name rules do not fire. `jsonb[]` is an array, not this row |
 
 `rule:enum` is where introspection beats any amount of guessing: a column
 constrained to three values gets exactly those three, and the generated data
@@ -477,38 +606,71 @@ default is left alone, because the default is the better value.
 ## `mockagen map`
 
 ```sh
-mockagen map -schema users.schema.yaml -data legacy.csv [-map existing.map.yaml]
+mockagen map -schema users.schema.yaml -data legacy.csv \
+    [-map existing.map.yaml] [-out users.map.yaml] [-sample 1000]
 ```
+
+`-schema` and `-data` are required without `-tui`. `-out` defaults to stdout.
+`-sample` is how many leading rows to profile and, unless a later validate
+says otherwise, how many to push through the plan. The default is 1000. Exit 2
+on a flag error, exit 1 when the written map is not clean, exit 0 when it is.
+A partial map is still written.
+
+`mockagen map -tui` asks for each file flag that was left off, with the bubbles
+file picker. `-schema` and `-data` have to be chosen. `-map` is offered and
+can be skipped. `-out` stays stdout unless the flag was passed, because the
+picker can only select a file that already exists. A file that does not load
+stays on that picker with the error. `q` cancels and writes nothing. Without
+`-tui`, a missing required flag is still exit 2, so a script never opens a
+screen.
 
 **Source setup.** The sniffed format and its options - delimiter, quote, header,
 encoding, record path for JSON, column offsets for fixed-width - over a live
 preview of the raw first rows, so a wrong delimiter is visible rather than
-inferred from a confusing error later.
+inferred from a confusing error later. The header that preview shows is what
+lands in `source.fields`.
 
-**The mapping board.** Source fields on the left, each with a profile computed in
-one bounded pass over a sample: inferred type, null rate, distinct count, min and
-max length, a few distinct values. Target columns on the right with their facts.
-Auto-matched by exact name, then normalised name, then fuzzily. `space` links the
-selected pair, `x` ignores a source field, `c` makes a target constant, `t` opens
-the transform editor.
+**The mapping board.** Source fields on the left, each with a profile computed
+in one bounded pass over the sample: inferred type, null rate, a capped distinct
+count, min and max length, a few distinct values. Target columns on the right
+with their facts. Auto-match stops at the first pass that yields a single
+winner: exact
+name, then a normalised name (case-fold, spaces and hyphens to `_`, other
+punctuation dropped), then a fuzzy match only when one target is strictly
+nearer than every other. An ambiguous pair stays unmatched. A text target
+starts with `trim`. A time or numeric target starts with an empty chain and no
+invented `format`. An enum target starts with `trim` and the unfinished `to:`
+lookup. Identity columns go straight to `omitted`. An unmatched column with a
+database default, and an unmatched nullable column, go to `omitted`. An
+unmatched `NOT NULL` column with no default and no identity stays unseen, and
+the board renders it as a blocker.
 
-Target columns that are `NOT NULL`, have no default, are not identity, and have
-no mapping are **blockers**, not warnings. They are the rows that will fail the
-load, and they are knowable now.
+`space` links the selected pair, `x` ignores a source field, `c` makes a target
+constant, `o` moves a legal target to `omitted`, `t` opens the transform editor.
+`s` writes the map and leaves the screen up. `q` is the only way out, and it
+asks when the map differs from the copy at open or at the last `s`. Saving is
+not how the screen closes, so a long map can be checkpointed in place.
+Re-opening with `-map` after `mockagen schema -update` is the drift view: a new
+column is unseen, a renamed column is a stale target, and `omitted` survives.
+Propose fills only the unseen columns.
 
-**The transform editor.** The chain for one field, with the first N source rows
-and their transformed values beside it, errors inline per row, and chain validity
-checked against each transform's accepts/produces kinds as you build it.
+**The transform editor.** The chain for one field, then the four steps after it
+(`null_if`, coercion, `default`, the schema checks), with the first N source
+rows and their transformed values beside it. Errors sit inline per row. Chain
+validity is checked against each transform's accepts/produces kinds as you
+build it.
 
 **Validate.** The whole file, or the first N rows, through the real pipeline with
 a discarding sink. Errors histogrammed by field and reason, with sample offending
 rows and their line numbers. Fourteen unparseable dates are a thing to find here,
-not after a half-loaded table.
+not after a half-loaded table. A header that no longer matches `source.fields`
+fails before the first row.
 
 That is also why the importer is built first. These two panes are not a
 reimplementation of the import logic - they are `Options.Limit` and
 `Options.SampleRows` with a different renderer, which is why both are library
-options rather than something the TUI loops over itself.
+options rather than something the TUI loops over itself. The TUI calls
+`Propose`, `Compile`, and `Run`. It does not grow a second mapper.
 
 ## `pkg/importer`
 
@@ -517,17 +679,18 @@ record in memory", and CI benchmarks every commit against its predecessor. So th
 row contract is pull-based and destination-filling, and the record type is built
 for zero steady-state allocation.
 
-Two decisions drive the rest. **A zero `Value` is NULL**, so a short CSV row, an
-absent JSON key and an unmapped target column are all correct by construction
-rather than by convention. And **text lives in a per-record arena, with values
-holding offsets into it** - a `[]byte` field would be invalidated by the very
-append that grows the arena, and `any` would heap-allocate on every int64, which
-at thirty columns is thirty allocations per row before any work happens.
+Two decisions drive the rest. **A zero `Value` is NULL**, so a short CSV row and
+an absent JSON key are NULL by construction rather than by convention. An
+omitted target is not a value in that record: the sink's column list skips it.
+And **text lives in a per-record arena, with values holding offsets into it** -
+a `[]byte` field would be invalidated by the very append that grows the arena,
+and `any` would heap-allocate on every int64, which at thirty columns is thirty
+allocations per row before any work happens.
 
 ```go
 // Kind is the SQL-shaped type of a Value. KindNull is the zero value so that a
-// freshly reset Record is all-NULL: a short row, a missing JSON key and an
-// unmapped target column then need no special case to load correctly.
+// freshly reset Record is all-NULL: a short row and a missing JSON key then
+// need no special case. Omitted targets are left off the record.
 type Kind uint8
 
 const (
@@ -592,8 +755,8 @@ func (r *Record) Arg(i int) any
 // uses, is affordable when generating and not when loading a file.
 type Source interface {
 	// Fields names the source's columns in positional order, so a FieldMap is
-	// resolved by name once rather than per row. Nil for a headerless source,
-	// where fields are addressed by index.
+	// resolved by name once rather than per row. Nil for a headerless source;
+	// that file is addressed by the indexes stored on the map.
 	Fields() []string
 	// Next fills dst with the next row, reporting false at end of input. dst
 	// is Reset first, so a short row leaves its tail NULL.
@@ -601,17 +764,21 @@ type Source interface {
 	Close() error
 }
 
-// Column is one target column: enough for a sink to write it and for a Plan to
-// coerce into it.
+// Column is one target column the sink will write. Kind is classified from
+// SQLType, never from the schema's generator type. Omitted columns are absent
+// from this list, so a database default fires and a nullable omission becomes
+// NULL without an explicit NULL overriding a default.
 type Column struct {
-	Name     string
-	Kind     Kind
-	SQLType  string // the introspected spelling, for error messages
-	Nullable bool
-	// Identity marks a column the database fills itself, which a sink omits
-	// from its INSERT entirely: postgres rejects an explicit value for
-	// GENERATED ALWAYS, and BULK INSERT maps fields by position.
-	Identity bool
+	Name       string
+	Kind       Kind
+	SQLType    string // the introspected spelling, for error messages
+	Nullable   bool
+	Identity   bool
+	HasDefault bool
+	MaxLength  int64 // 0 means the schema named no limit
+	Precision  int64
+	Scale      int64 // -1 means the schema named no scale
+	EnumValues []string
 }
 
 // Sink consumes target-ordered rows. One interface serves a .sql file, a
@@ -635,14 +802,15 @@ type Execer interface {
 ```
 
 ```go
-// Plan is a compiled FieldMap: for each target column, where its value comes
+// Plan is a compiled FieldMap: for each written column, where its value comes
 // from and what happens on the way. Compiled once, so a bad regex, an unknown
-// transform, an unmapped NOT NULL column or an uncoercible type is an error
-// before the first row is read rather than on row 900,000.
+// transform, a blocker, a stale name, an unfinished lookup, or an uncoercible
+// constant is an error before the first row is read rather than on row 900,000.
 type Plan struct{ /* ... */ }
 
-// Apply maps src (source-ordered) into dst (target-ordered). dst is Reset, so
-// unmapped target columns come out NULL.
+// Apply maps src (source-ordered) into dst (write-list order). dst is Reset,
+// so a mapped cell that produces null stays NULL. Omitted columns are not in
+// dst; the sink's column list skips them.
 func (p *Plan) Apply(src, dst *Record) error
 
 type Options struct {
@@ -687,6 +855,12 @@ The CLI:
 mockagen import -map users.map.yaml -data legacy.csv \
     [-out out.sql] [-rejects rejects.csv] [-limit N] [-dry-run]
 ```
+
+The schema path is read from the map and resolved against the map file's
+directory. Before the first row, the source header is compared to
+`source.fields` (or the row width to `indexes`). A mismatch exits 1 and names
+both sides. A plan with a blocker, a stale name, or an unfinished lookup does
+not run.
 
 One detail deserves space, because it is otherwise learned the hard way. The bulk
 CSV writer quotes *every* field, and the reason is NULL: postgres `COPY` and
@@ -869,7 +1043,7 @@ saying why it exists.
 | 0a | `-output` and `MkdirAll`, alone. Ten lines, independent, the sharpest existing papercut |
 | 0b | Subcommand dispatch, `-version`, `.yml`; `pkg/mockagen/types` with `SQLAffinity`; `pkg/mockagen/sqlgen` extraction plus `AppendValue`; the error-returning loader with `kind` dispatch |
 | 1 | `pkg/schema` + `introspect` for four dialects + `infer.go`, and `mockagen schema` as a non-interactive command, with the four-dialect integration tests |
-| 2 | `pkg/importer` with the csv and json readers and the file sinks, plus `mockagen import` |
+| 2 | `pkg/importer` with the csv and json readers and the file sinks, plus `mockagen import` and non-interactive `mockagen map` |
 | 3 | The remaining readers; then both TUIs, last, by which point the panes' requirements are known |
 | — | In parallel, outside this document's scope: the generator work above. It blocks schema-derived generation and nothing else |
 
@@ -891,5 +1065,6 @@ is held to are in [AGENTS.md](../../AGENTS.md).
   are two runs in the right order, by hand. The natural later addition is a
   `kind: ImportPlan` listing field maps in dependency order - worth knowing
   whether that is on the horizon before these formats harden.
-- **Source profiling cost.** The mapping board needs a sample. For a 10 GB CSV,
-  is the first N rows acceptable, or does it need a reservoir over the whole file?
+- **Source profiling cost.** v1 reads the first N rows (`-sample`, default
+  1000). For a 10 GB CSV, is that head enough, or does a later revision need a
+  reservoir over the whole file?

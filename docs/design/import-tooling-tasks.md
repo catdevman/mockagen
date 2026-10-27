@@ -192,7 +192,15 @@ Design: *`mockagen schema`*, and the facts list in *`kind: Schema`*.
 - The hardest part is not the SQL: it is that `CHECK (x IN (...))` comes back
   rewritten differently by all four engines, and **mssql loses the declared
   order**. One small parser per dialect, each returning `(column, values, ok)`
-  and bailing to `ok = false` on anything unrecognised.
+  and bailing to `ok = false` on anything unrecognised. `ISJSON`,
+  `JSON_PATH_EXISTS`, `JSON_SCHEMA_VALID`, and `jsonb_typeof` are
+  unrecognised. They do not become `enum_values` or a key list.
+- A `json` or `jsonb` column is that `sql_type` and nothing else. Postgres
+  `format_type` and MySQL `COLUMN_TYPE` already return the spelling. The
+  verified SQL Server image is 2022, which has no native `json` type, so a
+  document there stays `nvarchar(max)`. SQL Server 2025's `json` is `ty.name`
+  with no length suffix. Do not add a query for document shape, and do not
+  sniff sample values to promote a text column.
 - Done when, behind `//go:build integration`, a per-dialect table creates one
   fixture table covering a primary key, an identity column, `NOT NULL`,
   `UNIQUE`, a `DEFAULT`, `varchar(n)`, `numeric(p,s)`, an enum or CHECK and a
@@ -207,6 +215,8 @@ Design: *Inference*.
 - Files: `pkg/schema/infer.go`. Not a package.
 - Ordered rules, key rules before name rules before type rules, each with the
   stable id that lands in `inferred_by`. The table in the design is the spec.
+  `json` and `jsonb` match no rule, including the name rules, and stay
+  unresolved. `nvarchar` still matches `type:text`.
 - Done when a table test drives every rule from a synthetic column and asserts
   the chosen type *and* the id; plus a meta-test asserting every type any rule
   can emit exists in the catalog.
@@ -245,7 +255,9 @@ Design: *`pkg/importer`*.
   - `BenchmarkPlanApply` and the per-sink import benchmarks report **0
     allocs/op** in steady state. This is the acceptance criterion the arena
     design exists for; if it does not hold, the design is not implemented.
-  - Identity columns are absent from the generated `INSERT` column list.
+  - The `INSERT` column list contains only columns the plan writes. Identity
+    columns and every other omitted column are absent. A mapped null is an
+    explicit NULL, including when the schema column has a database default.
 
 ### T2.2 - FieldMap: types, compile, transforms
 
@@ -253,16 +265,33 @@ Design: *`kind: FieldMap`*.
 
 - Files: `pkg/importer/fieldmap.go`, `pkg/importer/transform.go`.
 - Six transforms and no more: `trim`, `case`, `replace`, `regex_replace`, `map`,
-  `pad_left`/`pad_right`. Coercion is the target type plus `format`; `null_if`
-  and `default` are field options. **`expr:` is reserved and unimplemented** -
-  leave it that way.
+  `pad_left`/`pad_right`. The apply order is the string chain, then `null_if`,
+  then coercion from `sql_type` plus the field's `format`, then `default`, then
+  the schema checks (`max_length`, precision, scale, `enum_values`). Do not
+  read the column's generator `type` or `format`. **`expr:` is reserved and
+  unimplemented** - leave it that way. There is no `required` key.
+- A field has one origin: `source`, `sources` plus `join`, `coalesce`, or
+  `constant`. `sources` without `join` does not coalesce. `object` is
+  specified under *`kind: FieldMap`* and is [T2.6](#t26---object-origin),
+  not this task.
+- `schema:` resolves relative to the map file. `source.fields` pins a header;
+  headerless input uses `indexes`.
 - Single-key maps need a custom `UnmarshalYAML` reading one key off a
-  `yaml.Node`.
-- Compile-time errors, before any row: unknown transform, bad regex, a chain
-  whose kinds do not line up, a multi-source field that does not start with a
-  reducer, an unmapped `NOT NULL` non-identity target with no default.
-- Done when a table test covers each transform including edge cases, and a second
-  table asserts each compile-time rejection by its error.
+  `yaml.Node`. An enum seed is `map.to` with no pairs, and it is unfinished.
+- Compile reports, before any row: unknown transform, bad regex, a chain whose
+  kinds do not line up, two origins on one field, a `format` on a non-time
+  column, an uncoercible constant, a target that is `identity`, a blocker
+  (`NOT NULL`, no default, not identity, not mapped), a stale name, an
+  unfinished lookup, and an `omitted` entry that is none of identity, defaulted,
+  or nullable.
+- `Propose` matches exact, then normalised, then one unambiguous fuzzy winner.
+  It seeds text with `trim`, enums with `trim` plus `map.to`, and puts identity,
+  unmatched defaults, and unmatched nullables into `omitted`. Re-proposing onto
+  an existing map fills unseen columns only and does not rewrite edited chains.
+- Done when a table test covers each transform including edge cases, a second
+  table asserts each compile diagnostic by its error, and a third pins Propose:
+  the three match passes, an ambiguous fuzzy pair left unmatched, an enum seed,
+  and a re-run that preserves an edited chain.
 
 ### T2.3 - `mockagen import`
 
@@ -270,11 +299,15 @@ Design: *`pkg/importer`*.
 
 - Files: `cmd/mockagen/import.go`.
 - `-map`, `-data`, `-out`, `-rejects`, `-limit`, `-dry-run`.
+- Load the schema from the map's `schema` path, relative to the map file.
+  Compare the data file's header to `source.fields`, or its width to `indexes`,
+  before the first row. Refuse a plan that still has a blocker, a stale name,
+  or an unfinished lookup.
 - `Report` counts and the rejects file carrying each bad row with its source line
-  number and reason.
+  number and reason. A schema-check miss is a row error, same as a bad date.
 - Done when a golden test imports a small CSV against a schema and pins the
   emitted SQL byte for byte, the rejects file for a file with three bad rows, and
-  the report counts.
+  the report counts. A swapped header fails with both names and writes no output.
 
 ### T2.4 - round-trip integration
 
@@ -285,6 +318,45 @@ Design: *Testing*.
 - Expect this to fail until the generator work in *The generator gap* lands.
   That is the point of the test; skip it with a clear message naming the gap
   rather than weakening it.
+
+### T2.5 - `mockagen map`, non-interactive
+
+Design: *`mockagen map`*.
+
+- Files: `cmd/mockagen/map.go`. The stub in `main.go` dispatches here.
+- `-schema` and `-data` are required. `-map` loads an existing file. `-out`
+  defaults to stdout. `-sample` defaults to 1000 leading rows. `-tui` is the
+  exception: a missing `-schema`, `-data`, or `-map` is collected with a file
+  picker instead of exit 2. `-map` can be skipped. `-out` is not prompted.
+- Exit 2 on a flag error. Exit 1 when the written map still has a diagnostic.
+  Exit 0 when it is clean. Write the file in every case where it encodes.
+- Done when a test proposes a map from a schema and a CSV header, pins the
+  YAML, and shows a second run with `-map` adding only an unseen column. A
+  header that disagrees with the stored `source.fields` is reported and does
+  not rebind existing entries.
+
+### T2.6 - `object` origin
+
+Design: *JSON columns* and *`kind: FieldMap`*.
+
+Not started. T2.2's four origins stay as they are until this task.
+
+- One field, one column. `object` is an origin, not a seventh transform, and
+  it cannot share the field with `source`, `join`, `coalesce`, or `constant`.
+- The shape in the design is the shape. Key order in the file is the order
+  emitted. A null leaf is omitted. Each leaf is the normal string chain.
+  Nested objects use the same shape. Arrays and a JSON Schema on the column
+  are out of scope.
+- The assembled text is parsed once. A constant that is not valid JSON fails
+  compile. A row that does not assemble is a row error. `json` and `jsonb`
+  stay text at coercion, so a single source cell that is already a document
+  stays a normal `source`. `object` is also legal on a text column.
+- The mapping screen offers the editor when `sql_type` is `json` or `jsonb`.
+  Keys are typed. Keys parsed from a sample cell are hints, not facts.
+- Done when a table test pins the emitted document, a null leaf's absence,
+  a bad constant at compile time, and a bad row. A second test shows a
+  `jsonb` column staying unresolved through inference, with `sql_type`
+  still `jsonb`.
 
 ---
 
@@ -316,7 +388,15 @@ Design: *`mockagen map`*.
 
 Source setup, mapping board, transform editor, validate, save. The preview and
 validate panes are `Options.Limit` and `Options.SampleRows` against a discarding
-sink - they must not reimplement any mapping logic. Unmapped `NOT NULL` targets
-render as blockers, not warnings.
+sink - they must not reimplement any mapping logic. Call `Propose`, `Compile`,
+and `Run`. A `NOT NULL` target with no default, no identity, and no mapping
+renders as a blocker. `o` moves a legal target to `omitted`. The transform
+editor shows the chain and then `null_if`, coercion, `default`, and the schema
+checks, with the sample values beside them. `s` writes and stays. `q` quits,
+and asks when the map is dirty since the last save. A missing file flag opens
+the bubbles file picker before the board. A bad file stays on the picker.
+`s` there skips an existing map. The object editor for a `json` or `jsonb`
+column arrives with [T2.6](#t26---object-origin). This screen does not grow
+a key list of its own.
 
 Tested as T3.2 is.
